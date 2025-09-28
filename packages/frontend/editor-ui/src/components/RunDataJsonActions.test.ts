@@ -13,7 +13,7 @@ import { useWorkflowsStore } from '@/stores/workflows.store';
 import { createComponentRenderer } from '@/__tests__/render';
 import { setupServer } from '@/__tests__/server';
 import { defaultNodeDescriptions, mockNodes } from '@/__tests__/mocks';
-import { useI18n } from '@/composables/useI18n';
+import { useI18n } from '@n8n/i18n';
 
 vi.mock('vue-router', () => {
 	return {
@@ -68,8 +68,9 @@ async function createPiniaWithActiveNode() {
 				runData: {
 					[node.name]: [
 						{
-							startTime: new Date().getTime(),
-							executionTime: new Date().getTime(),
+							startTime: Date.now(),
+							executionIndex: 0,
+							executionTime: 1,
 							data: {
 								main: [
 									[
@@ -91,8 +92,9 @@ async function createPiniaWithActiveNode() {
 							source: [null],
 						},
 						{
-							startTime: new Date().getTime(),
-							executionTime: new Date().getTime(),
+							startTime: Date.now(),
+							executionIndex: 1,
+							executionTime: 1,
 							data: {
 								main: [
 									[
@@ -113,7 +115,7 @@ async function createPiniaWithActiveNode() {
 		},
 	};
 
-	ndvStore.activeNodeName = node.name;
+	ndvStore.setActiveNodeName(node.name, 'other');
 
 	return {
 		pinia,
@@ -127,7 +129,6 @@ describe('RunDataJsonActions', () => {
 	beforeEach(cleanup);
 
 	beforeAll(() => {
-		document.body.innerHTML = '<div id="app-grid"></div>';
 		server = setupServer();
 	});
 

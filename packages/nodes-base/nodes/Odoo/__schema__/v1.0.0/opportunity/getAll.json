@@ -1,12 +1,21 @@
 {
     "type": "object",
     "properties": {
+        "active": {
+            "type": "boolean"
+        },
         "id": {
             "type": "integer"
         },
-        "won_status": {
+        "name": {
             "type": "string"
+        },
+        "tag_ids": {
+            "type": "array",
+            "items": {
+                "type": "integer"
+            }
         }
     },
-    "version": 1
+    "version": 7
 }

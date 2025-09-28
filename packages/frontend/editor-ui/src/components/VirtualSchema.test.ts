@@ -1,33 +1,38 @@
-import { createComponentRenderer } from '@/__tests__/render';
-import VirtualSchema from '@/components/VirtualSchema.vue';
-import { useWorkflowsStore } from '@/stores/workflows.store';
-import { userEvent } from '@testing-library/user-event';
-import { cleanup, waitFor } from '@testing-library/vue';
-import { createPinia, setActivePinia } from 'pinia';
 import {
 	createTestNode,
 	defaultNodeDescriptions,
 	mockNodeTypeDescription,
 } from '@/__tests__/mocks';
-import { IF_NODE_TYPE, SET_NODE_TYPE, MANUAL_TRIGGER_NODE_TYPE } from '@/constants';
-import { useNodeTypesStore } from '@/stores/nodeTypes.store';
-import { mock } from 'vitest-mock-extended';
+import { createComponentRenderer } from '@/__tests__/render';
+import VirtualSchema from '@/components/VirtualSchema.vue';
+import * as nodeHelpers from '@/composables/useNodeHelpers';
+import { useTelemetry } from '@/composables/useTelemetry';
+import {
+	IF_NODE_TYPE,
+	MANUAL_TRIGGER_NODE_TYPE,
+	SET_NODE_TYPE,
+	SPLIT_IN_BATCHES_NODE_TYPE,
+} from '@/constants';
 import type { IWorkflowDb } from '@/Interface';
+import { useNDVStore } from '@/stores/ndv.store';
+import { useNodeTypesStore } from '@/stores/nodeTypes.store';
+import { useWorkflowsStore } from '@/stores/workflows.store';
+import { createTestingPinia } from '@pinia/testing';
+import { fireEvent } from '@testing-library/dom';
+import { userEvent } from '@testing-library/user-event';
+import { cleanup, waitFor } from '@testing-library/vue';
 import {
 	createResultOk,
 	NodeConnectionTypes,
-	type IDataObject,
+	type IBinaryData,
 	type INodeExecutionData,
 } from 'n8n-workflow';
-import * as nodeHelpers from '@/composables/useNodeHelpers';
-import * as workflowHelpers from '@/composables/useWorkflowHelpers';
-import { useNDVStore } from '@/stores/ndv.store';
-import { fireEvent } from '@testing-library/dom';
-import { useTelemetry } from '@/composables/useTelemetry';
-import { useSchemaPreviewStore } from '../stores/schemaPreview.store';
-import { usePostHog } from '../stores/posthog.store';
-import { useSettingsStore } from '../stores/settings.store';
+import { setActivePinia } from 'pinia';
+import { mock } from 'vitest-mock-extended';
 import { defaultSettings } from '../__tests__/defaults';
+import { usePostHog } from '../stores/posthog.store';
+import { useSchemaPreviewStore } from '../stores/schemaPreview.store';
+import { useSettingsStore } from '../stores/settings.store';
 
 const mockNode1 = createTestNode({
 	name: 'Manual Trigger',
@@ -65,9 +70,31 @@ const aiTool = createTestNode({
 	disabled: false,
 });
 
+const nodeWithCredential = createTestNode({
+	name: 'Notion',
+	type: 'n8n-nodes-base.notion',
+	typeVersion: 1,
+	credentials: { notionApi: { id: 'testId', name: 'testName' } },
+	disabled: false,
+});
+
 const unknownNodeType = createTestNode({
 	name: 'Unknown Node Type',
 	type: 'unknown',
+});
+
+const splitInBatchesNode = createTestNode({
+	name: 'SplitInBatches',
+	type: SPLIT_IN_BATCHES_NODE_TYPE,
+	typeVersion: 1,
+	disabled: false,
+});
+
+const customerDatastoreNode = createTestNode({
+	name: 'Customer Datastore',
+	type: 'n8n-nodes-base.n8nTrainingCustomerDatastore',
+	typeVersion: 1,
+	disabled: false,
 });
 
 const defaultNodes = [
@@ -76,20 +103,31 @@ const defaultNodes = [
 ];
 
 async function setupStore() {
-	const workflow = mock<IWorkflowDb>({
+	const workflow = {
 		id: '123',
 		name: 'Test Workflow',
 		connections: {},
 		active: true,
-		nodes: [mockNode1, mockNode2, disabledNode, ifNode, aiTool, unknownNodeType],
-	});
+		nodes: [
+			mockNode1,
+			mockNode2,
+			disabledNode,
+			ifNode,
+			aiTool,
+			unknownNodeType,
+			nodeWithCredential,
+			splitInBatchesNode,
+			customerDatastoreNode,
+		],
+	};
 
-	const pinia = createPinia();
+	const pinia = createTestingPinia({ stubActions: false });
 	setActivePinia(pinia);
 
 	const workflowsStore = useWorkflowsStore();
 	const nodeTypesStore = useNodeTypesStore();
 	const settingsStore = useSettingsStore();
+	const ndvStore = useNDVStore();
 	settingsStore.setSettings(defaultSettings);
 
 	nodeTypesStore.setNodeTypes([
@@ -102,20 +140,35 @@ async function setupStore() {
 			name: IF_NODE_TYPE,
 			outputs: [NodeConnectionTypes.Main, NodeConnectionTypes.Main],
 		}),
+		mockNodeTypeDescription({
+			name: 'n8n-nodes-base.notion',
+			outputs: [NodeConnectionTypes.Main],
+		}),
+		mockNodeTypeDescription({
+			name: SPLIT_IN_BATCHES_NODE_TYPE,
+			outputs: [NodeConnectionTypes.Main, NodeConnectionTypes.Main],
+		}),
+		mockNodeTypeDescription({
+			name: 'n8n-nodes-base.n8nTrainingCustomerDatastore',
+			outputs: [NodeConnectionTypes.Main],
+		}),
 	]);
-	workflowsStore.workflow = workflow;
+	workflowsStore.workflow = workflow as IWorkflowDb;
+	ndvStore.setActiveNodeName('Test Node Name', 'other');
 
 	return pinia;
 }
 
-function mockNodeOutputData(nodeName: string, data: IDataObject[], outputIndex = 0) {
+function mockNodeOutputData(nodeName: string, data: INodeExecutionData[], outputIndex = 0) {
 	const originalNodeHelpers = nodeHelpers.useNodeHelpers();
 	vi.spyOn(nodeHelpers, 'useNodeHelpers').mockImplementation(() => {
 		return {
 			...originalNodeHelpers,
+			getLastRunIndexWithData: vi.fn(() => 0),
+			hasNodeExecuted: vi.fn(() => true),
 			getNodeInputData: vi.fn((node, _, output) => {
 				if (node.name === nodeName && output === outputIndex) {
-					return data.map((json) => ({ json }));
+					return data;
 				}
 				return [];
 			}),
@@ -146,23 +199,22 @@ describe('VirtualSchema.vue', () => {
 
 	beforeEach(async () => {
 		cleanup();
-		vi.spyOn(workflowHelpers, 'resolveParameter').mockReturnValue(123);
+		vi.resetAllMocks();
 		vi.setSystemTime('2025-01-01');
+		const pinia = await setupStore();
+
 		renderComponent = createComponentRenderer(VirtualSchema, {
 			global: {
 				stubs: {
 					DynamicScroller: DynamicScrollerStub,
 					DynamicScrollerItem: DynamicScrollerItemStub,
-					FontAwesomeIcon: true,
+					N8nIcon: true,
 					Notice: NoticeStub,
 				},
 			},
-			pinia: await setupStore(),
+			pinia,
 			props: {
 				mappingEnabled: true,
-				runIndex: 1,
-				outputIndex: 0,
-				totalRuns: 2,
 				paneType: 'input',
 				connectionType: 'main',
 				search: '',
@@ -171,16 +223,24 @@ describe('VirtualSchema.vue', () => {
 		});
 	});
 
-	it('renders schema for empty data', async () => {
-		const { getAllByText, getAllByTestId } = renderComponent();
+	it('renders schema for empty data for unexecuted nodes', async () => {
+		const { getAllByText } = renderComponent();
+
+		await waitFor(() => expect(getAllByText('Execute previous nodes').length).toBe(1));
+	});
+
+	it('renders schema for empty data with binary', async () => {
+		mockNodeOutputData(mockNode1.name, [{ json: {}, binary: { data: mock<IBinaryData>() } }]);
+
+		const { getByText } = renderComponent({
+			props: { nodes: [{ name: mockNode1.name, indicies: [], depth: 1 }] },
+		});
 
 		await waitFor(() =>
-			expect(getAllByText("No fields - item(s) exist, but they're empty").length).toBe(2),
+			expect(
+				getByText("Only binary data exists. View it using the 'Binary' tab"),
+			).toBeInTheDocument(),
 		);
-
-		// Collapse second node
-		await userEvent.click(getAllByTestId('run-data-schema-header')[1]);
-		expect(getAllByText("No fields - item(s) exist, but they're empty").length).toBe(1);
 	});
 
 	it('renders schema for data', async () => {
@@ -261,7 +321,7 @@ describe('VirtualSchema.vue', () => {
 
 		await waitFor(() => {
 			const items = getAllByTestId('run-data-schema-item');
-			expect(items).toHaveLength(6);
+			expect(items).toHaveLength(5);
 		});
 
 		expect(container).toMatchSnapshot();
@@ -275,7 +335,7 @@ describe('VirtualSchema.vue', () => {
 
 		const { getAllByText } = renderComponent();
 		await waitFor(() =>
-			expect(getAllByText("No fields - item(s) exist, but they're empty").length).toBe(2),
+			expect(getAllByText("No fields - item(s) exist, but they're empty").length).toBe(1),
 		);
 	});
 
@@ -288,7 +348,9 @@ describe('VirtualSchema.vue', () => {
 
 		const { getAllByText } = renderComponent({ props: { paneType: 'output' } });
 		await waitFor(() =>
-			expect(getAllByText("No fields - item(s) exist, but they're empty").length).toBe(1),
+			expect(
+				getAllByText('No fields - node executed, but no items were sent on this branch').length,
+			).toBe(1),
 		);
 	});
 
@@ -307,10 +369,7 @@ describe('VirtualSchema.vue', () => {
 	it('renders schema for correct output branch', async () => {
 		mockNodeOutputData(
 			'If',
-			[
-				{ id: 1, name: 'John' },
-				{ id: 2, name: 'Jane' },
-			],
+			[{ json: { id: 1, name: 'John' } }, { json: { id: 2, name: 'Jane' } }],
 			1,
 		);
 		const { getAllByTestId } = renderComponent({
@@ -323,17 +382,49 @@ describe('VirtualSchema.vue', () => {
 			const headers = getAllByTestId('run-data-schema-header');
 			expect(headers[0]).toHaveTextContent('If');
 			expect(headers[0]).toHaveTextContent('2 items');
-			expect(headers[0]).toMatchSnapshot();
+		});
+	});
+
+	it('renders schema for specific output branch when outputIndex is specified', async () => {
+		const originalNodeHelpers = nodeHelpers.useNodeHelpers();
+		vi.spyOn(nodeHelpers, 'useNodeHelpers').mockImplementation(() => {
+			return {
+				...originalNodeHelpers,
+				getLastRunIndexWithData: vi.fn(() => 0),
+				hasNodeExecuted: vi.fn(() => true),
+				getNodeInputData: vi.fn((node, _, outputIndex) => {
+					if (node.name === 'If' && outputIndex === 1) {
+						return [{ json: { doneItems: 'done branch data' } }];
+					}
+					if (node.name === 'If' && outputIndex === 0) {
+						return [{ json: { loopItems: 'loop branch data' } }];
+					}
+					return [];
+				}),
+			};
+		});
+
+		const { getAllByTestId } = renderComponent({
+			props: {
+				nodes: [{ name: 'If', indicies: [0, 1], depth: 2 }],
+				outputIndex: 1,
+			},
+		});
+
+		await waitFor(() => {
+			const headers = getAllByTestId('run-data-schema-header');
+			expect(headers[0]).toHaveTextContent('If');
+			expect(headers[0]).toHaveTextContent('1 item');
+
+			const items = getAllByTestId('run-data-schema-item');
+			expect(items[0]).toHaveTextContent('doneItemsdone branch data');
 		});
 	});
 
 	it('renders previous nodes schema for AI tools', async () => {
 		mockNodeOutputData(
 			'If',
-			[
-				{ id: 1, name: 'John' },
-				{ id: 2, name: 'Jane' },
-			],
+			[{ json: { id: 1, name: 'John' } }, { json: { id: 2, name: 'Jane' } }],
 			0,
 		);
 		const { getAllByTestId } = renderComponent({
@@ -408,7 +499,10 @@ describe('VirtualSchema.vue', () => {
 			},
 		});
 
-		await waitFor(() => expect(getAllByTestId('run-data-schema-item').length).toBe(2));
+		await waitFor(() => {
+			expect(getAllByTestId('run-data-schema-header')).toHaveLength(3);
+			expect(getAllByTestId('run-data-schema-item').length).toBe(1);
+		});
 	});
 
 	it('should show connections', async () => {
@@ -432,8 +526,8 @@ describe('VirtualSchema.vue', () => {
 		function dragDropPill(pill: HTMLElement) {
 			const ndvStore = useNDVStore();
 			const reset = vi.spyOn(ndvStore, 'resetMappingTelemetry');
-			fireEvent(pill, new MouseEvent('mousedown', { bubbles: true }));
-			fireEvent(window, new MouseEvent('mousemove', { bubbles: true }));
+			fireEvent(pill, new MouseEvent('mousedown', { bubbles: true, button: 0, buttons: 1 }));
+			fireEvent(window, new MouseEvent('mousemove', { bubbles: true, button: 0, buttons: 1 }));
 			expect(reset).toHaveBeenCalled();
 
 			vi.useRealTimers();
@@ -454,7 +548,7 @@ describe('VirtualSchema.vue', () => {
 			const { getAllByTestId } = renderComponent();
 
 			await waitFor(() => {
-				expect(getAllByTestId('run-data-schema-item')).toHaveLength(6);
+				expect(getAllByTestId('run-data-schema-item')).toHaveLength(5);
 			});
 			const items = getAllByTestId('run-data-schema-item');
 
@@ -475,20 +569,11 @@ describe('VirtualSchema.vue', () => {
 						src_nodes_back: '1',
 						src_has_credential: false,
 					}),
-					{ withPostHog: true },
 				),
 			);
 		});
 
 		it('should track data pill drag and drop for schema preview', async () => {
-			useWorkflowsStore().pinData({
-				node: {
-					...mockNode2,
-					credentials: { myCredential: { id: 'myCredential', name: 'myCredential' } },
-				},
-				data: [],
-			});
-
 			const telemetry = useTelemetry();
 			const trackSpy = vi.spyOn(telemetry, 'track');
 			const posthogStore = usePostHog();
@@ -513,7 +598,7 @@ describe('VirtualSchema.vue', () => {
 
 			const { getAllByTestId } = renderComponent({
 				props: {
-					nodes: [{ name: mockNode2.name, indicies: [], depth: 1 }],
+					nodes: [{ name: nodeWithCredential.name, indicies: [], depth: 1 }],
 				},
 			});
 
@@ -530,7 +615,6 @@ describe('VirtualSchema.vue', () => {
 						src_view: 'schema_preview',
 						src_has_credential: true,
 					}),
-					{ withPostHog: true },
 				),
 			);
 		});
@@ -546,30 +630,27 @@ describe('VirtualSchema.vue', () => {
 			data: [{ json: { name: 'John' } }],
 		});
 
-		const { getAllByTestId, queryAllByTestId, rerender } = renderComponent();
+		const { getAllByTestId, queryAllByTestId, rerender, container } = renderComponent();
 
 		let headers: HTMLElement[] = [];
 		await waitFor(async () => {
 			headers = getAllByTestId('run-data-schema-header');
 			expect(headers.length).toBe(3);
-			expect(getAllByTestId('run-data-schema-item').length).toBe(2);
+			expect(getAllByTestId('run-data-schema-item').length).toBe(1);
 		});
 
-		// Collapse all nodes (Variables & context is collapsed by default)
-		await Promise.all(headers.slice(0, -1).map(async (header) => await userEvent.click(header)));
+		// Collapse first node (expanded by default)
+		await userEvent.click(headers[0]);
 
 		expect(queryAllByTestId('run-data-schema-item').length).toBe(0);
 
 		await rerender({ search: 'John' });
 
-		expect(getAllByTestId('run-data-schema-item').length).toBe(13);
+		expect(getAllByTestId('run-data-schema-item').length).toBe(2);
+		expect(container).toMatchSnapshot();
 	});
 
 	it('renders preview schema when enabled and available', async () => {
-		useWorkflowsStore().pinData({
-			node: mockNode1,
-			data: [],
-		});
 		useWorkflowsStore().pinData({
 			node: mockNode2,
 			data: [],
@@ -593,14 +674,18 @@ describe('VirtualSchema.vue', () => {
 			}),
 		);
 
-		const { getAllByTestId, queryAllByText, container } = renderComponent({});
-
-		await waitFor(() => {
-			expect(getAllByTestId('run-data-schema-header')).toHaveLength(3);
+		const { getAllByTestId, queryAllByText, container } = renderComponent({
+			props: {
+				nodes: [{ name: mockNode2.name, indicies: [], depth: 1 }],
+			},
 		});
 
+		await waitFor(() => {
+			expect(getAllByTestId('run-data-schema-header')).toHaveLength(2);
+		});
+
+		expect(getAllByTestId('schema-preview-warning')).toHaveLength(1);
 		expect(queryAllByText("No fields - item(s) exist, but they're empty")).toHaveLength(0);
-		expect(getAllByTestId('schema-preview-warning')).toHaveLength(2);
 		expect(container).toMatchSnapshot();
 	});
 
@@ -638,5 +723,135 @@ describe('VirtualSchema.vue', () => {
 		});
 
 		expect(container).toMatchSnapshot();
+	});
+
+	it('renders schema for empty objects and arrays', async () => {
+		useWorkflowsStore().pinData({
+			node: mockNode1,
+			data: [{ json: { empty: {}, emptyArray: [], nested: [{ empty: {}, emptyArray: [] }] } }],
+		});
+
+		const { container, getAllByTestId } = renderComponent({
+			props: {
+				nodes: [{ name: mockNode1.name, indicies: [], depth: 1 }],
+			},
+		});
+
+		await waitFor(() => {
+			const headers = getAllByTestId('run-data-schema-header');
+			expect(headers.length).toBe(2);
+		});
+		expect(container).toMatchSnapshot();
+	});
+
+	it('does not filter single-output connected nodes by outputIndex', async () => {
+		// This test verifies the fix for the issue where nodes with single output connections
+		// were incorrectly being filtered by the current node's outputIndex
+		const originalNodeHelpers = nodeHelpers.useNodeHelpers();
+		vi.spyOn(nodeHelpers, 'useNodeHelpers').mockImplementation(() => {
+			return {
+				...originalNodeHelpers,
+				getLastRunIndexWithData: vi.fn(() => 0),
+				hasNodeExecuted: vi.fn(() => true),
+				getNodeInputData: vi.fn((node, _, outputIndex) => {
+					// Switch node has data on output 0
+					if (node.name === 'If' && outputIndex === 0) {
+						return [{ json: { id: 1, name: 'John' } }, { json: { id: 2, name: 'Jane' } }];
+					}
+					// No data on output 1
+					if (node.name === 'If' && outputIndex === 1) {
+						return [];
+					}
+					return [];
+				}),
+			};
+		});
+
+		const { getAllByTestId } = renderComponent({
+			props: {
+				// If node is connected only via output 0 to the current node
+				nodes: [{ name: 'If', indicies: [0], depth: 2 }],
+				// Even though outputIndex is 1, the If node should still show its data
+				// because it only has a single connection (output 0)
+				outputIndex: 1,
+			},
+		});
+
+		await waitFor(() => {
+			const headers = getAllByTestId('run-data-schema-header');
+			expect(headers[0]).toHaveTextContent('If');
+			// Should show 2 items from output 0, not filtered by outputIndex: 1
+			expect(headers[0]).toHaveTextContent('2 items');
+
+			const items = getAllByTestId('run-data-schema-item');
+			// Should show the data from output 0
+			expect(items[0]).toHaveTextContent('id1');
+			expect(items[1]).toHaveTextContent('nameJohn');
+		});
+	});
+
+	it('renders schema for loop node done-branch with correct filtering', async () => {
+		// Mock customer datastore output - 6 customer items
+		const customerData = Array.from({ length: 6 }, (_, i) => ({
+			json: {
+				id: i + 1,
+				name: `Customer ${i + 1}`,
+				email: `customer${i + 1}@example.com`,
+				status: 'active',
+			},
+		}));
+
+		// Mock SplitInBatches node processing the loop with multiple items on output 0 (loop branch)
+		// and final completion signal on output 1 (done branch)
+		const originalNodeHelpers = nodeHelpers.useNodeHelpers();
+		vi.spyOn(nodeHelpers, 'useNodeHelpers').mockImplementation(() => {
+			return {
+				...originalNodeHelpers,
+				getLastRunIndexWithData: vi.fn(() => 0),
+				hasNodeExecuted: vi.fn(() => true),
+				getNodeInputData: vi.fn((node, _, outputIndex) => {
+					if (node.name === 'Customer Datastore') {
+						return customerData;
+					}
+					if (node.name === 'SplitInBatches' && outputIndex === 0) {
+						// Loop branch: return individual customer items processed one by one
+						return customerData; // Multiple items being processed
+					}
+					if (node.name === 'SplitInBatches' && outputIndex === 1) {
+						// Done branch: return completion signal with aggregated results
+						return [
+							{ json: { processed: 6, completed: true, summary: 'All customers processed' } },
+						];
+					}
+					return [];
+				}),
+			};
+		});
+
+		// Test the done branch (outputIndex: 1) specifically
+		const { getAllByTestId } = renderComponent({
+			props: {
+				nodes: [
+					{ name: 'Customer Datastore', indicies: [], depth: 1 },
+					{ name: 'SplitInBatches', indicies: [0, 1], depth: 2 },
+				],
+				outputIndex: 1, // Specifically viewing the done branch
+			},
+		});
+
+		await waitFor(() => {
+			const headers = getAllByTestId('run-data-schema-header');
+			expect(headers).toHaveLength(3); // Customer Datastore, SplitInBatches, and Variables
+
+			// Check Customer Datastore (first header)
+			expect(headers[0]).toHaveTextContent('Customer Datastore');
+
+			// Check SplitInBatches shows only 1 item from the done branch (not 6 from loop branch)
+			expect(headers[1]).toHaveTextContent('SplitInBatches');
+			expect(headers[1]).toHaveTextContent('1 item');
+
+			// This is the key assertion: the SplitInBatches node shows "1 item" instead of "6 items"
+			// which proves that the outputIndex filtering is working correctly for the done branch
+		});
 	});
 });

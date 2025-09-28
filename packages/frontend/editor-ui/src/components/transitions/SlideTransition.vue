@@ -1,12 +1,13 @@
 <template>
-	<transition name="slide">
+	<Transition name="slide">
 		<slot />
-	</transition>
+	</Transition>
 </template>
 
 <style lang="scss" scoped>
 .slide-leave-active,
 .slide-enter-active {
+	// Keep this in sync with ASK_AI_SLIDE_OUT_DURATION_MS
 	transition: 200ms ease;
 }
 .slide-leave-to,

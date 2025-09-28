@@ -4,7 +4,7 @@ import {
 	type PGVectorStoreArgs,
 } from '@langchain/community/vectorstores/pgvector';
 import type { EmbeddingsInterface } from '@langchain/core/embeddings';
-import { configurePostgres } from 'n8n-nodes-base/dist/nodes/Postgres/transport';
+import { configurePostgres } from 'n8n-nodes-base/dist/nodes/Postgres/transport/index';
 import type { PostgresNodeCredentials } from 'n8n-nodes-base/dist/nodes/Postgres/v2/helpers/interfaces';
 import type { INodeProperties } from 'n8n-workflow';
 import type pg from 'pg';
@@ -254,7 +254,7 @@ export class VectorStorePGVector extends createVectorStoreNode<ExtendedPGVectorS
 			{},
 		) as CollectionOptions;
 
-		if (collectionOptions && collectionOptions.useCollection) {
+		if (collectionOptions?.useCollection) {
 			config.collectionName = collectionOptions.collectionName;
 			config.collectionTableName = collectionOptions.collectionTableName;
 		}
@@ -296,7 +296,7 @@ export class VectorStorePGVector extends createVectorStoreNode<ExtendedPGVectorS
 			{},
 		) as CollectionOptions;
 
-		if (collectionOptions && collectionOptions.useCollection) {
+		if (collectionOptions?.useCollection) {
 			config.collectionName = collectionOptions.collectionName;
 			config.collectionTableName = collectionOptions.collectionTableName;
 		}

@@ -4,15 +4,15 @@ import { useToast } from '@/composables/useToast';
 import {
 	CHAT_TRIGGER_NODE_TYPE,
 	FORM_TRIGGER_NODE_TYPE,
+	MCP_TRIGGER_NODE_TYPE,
 	OPEN_URL_PANEL_TRIGGER_NODE_TYPES,
 	PRODUCTION_ONLY_TRIGGER_NODE_TYPES,
 } from '@/constants';
 import { useClipboard } from '@/composables/useClipboard';
 import { useWorkflowHelpers } from '@/composables/useWorkflowHelpers';
-import { useRouter } from 'vue-router';
 import type { INodeUi } from '@/Interface';
 import { computed, ref, watch } from 'vue';
-import { useI18n } from '@/composables/useI18n';
+import { useI18n } from '@n8n/i18n';
 import { useTelemetry } from '@/composables/useTelemetry';
 
 const props = defineProps<{
@@ -20,9 +20,8 @@ const props = defineProps<{
 	nodeTypeDescription: INodeTypeDescription | null;
 }>();
 
-const router = useRouter();
 const clipboard = useClipboard();
-const workflowHelpers = useWorkflowHelpers({ router });
+const workflowHelpers = useWorkflowHelpers();
 const toast = useToast();
 const i18n = useI18n();
 const telemetry = useTelemetry();
@@ -31,7 +30,7 @@ const isMinimized = ref(
 	props.nodeTypeDescription &&
 		!OPEN_URL_PANEL_TRIGGER_NODE_TYPES.includes(props.nodeTypeDescription.name),
 );
-const showUrlFor = ref('test');
+const showUrlFor = ref<'test' | 'production'>('test');
 
 const isProductionOnly = computed(() => {
 	return (
@@ -93,6 +92,18 @@ const baseText = computed(() => {
 				productionUrl: i18n.baseText('nodeWebhooks.productionUrl'),
 				copyTitle: i18n.baseText('nodeWebhooks.showMessage.title.formTrigger'),
 				copyMessage: i18n.baseText('nodeWebhooks.showMessage.message.formTrigger'),
+			};
+
+		case MCP_TRIGGER_NODE_TYPE:
+			return {
+				toggleTitle: i18n.baseText('nodeWebhooks.webhookUrls.mcpTrigger'),
+				clickToDisplay: i18n.baseText('nodeWebhooks.clickToDisplayWebhookUrls.mcpTrigger'),
+				clickToHide: i18n.baseText('nodeWebhooks.clickToHideWebhookUrls.mcpTrigger'),
+				clickToCopy: i18n.baseText('nodeWebhooks.clickToCopyWebhookUrls.mcpTrigger'),
+				testUrl: i18n.baseText('nodeWebhooks.testUrl'),
+				productionUrl: i18n.baseText('nodeWebhooks.productionUrl'),
+				copyTitle: i18n.baseText('nodeWebhooks.showMessage.title.mcpTrigger'),
+				copyMessage: undefined,
 			};
 
 		default:
@@ -177,20 +188,20 @@ watch(
 			:title="isMinimized ? baseText.clickToDisplay : baseText.clickToHide"
 			@click="isMinimized = !isMinimized"
 		>
-			<font-awesome-icon icon="angle-right" class="minimize-button minimize-icon" />
+			<N8nIcon icon="chevron-right" class="minimize-button minimize-icon" />
 			{{ baseText.toggleTitle }}
 		</div>
-		<el-collapse-transition>
+		<ElCollapseTransition>
 			<div v-if="!isMinimized" class="node-webhooks">
 				<div v-if="!isProductionOnly" class="url-selection">
-					<el-row>
-						<el-col :span="24">
-							<n8n-radio-buttons v-model="showUrlFor" :options="urlOptions" />
-						</el-col>
-					</el-row>
+					<ElRow>
+						<ElCol :span="24">
+							<N8nRadioButtons v-model="showUrlFor" :options="urlOptions" />
+						</ElCol>
+					</ElRow>
 				</div>
 
-				<n8n-tooltip
+				<N8nTooltip
 					v-for="(webhook, index) in visibleWebhookUrls"
 					:key="index"
 					class="item"
@@ -214,9 +225,9 @@ watch(
 							</div>
 						</div>
 					</div>
-				</n8n-tooltip>
+				</N8nTooltip>
 			</div>
-		</el-collapse-transition>
+		</ElCollapseTransition>
 	</div>
 </template>
 

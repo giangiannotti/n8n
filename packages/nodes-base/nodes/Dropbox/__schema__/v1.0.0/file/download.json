@@ -1,12 +1,12 @@
 {
     "type": "object",
     "properties": {
-        "name": {
+        "id": {
             "type": "string"
         },
-        "rev": {
+        "name": {
             "type": "string"
         }
     },
-    "version": 1
+    "version": 5
 }

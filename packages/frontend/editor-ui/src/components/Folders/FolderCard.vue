@@ -1,41 +1,48 @@
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, ref } from 'vue';
 import { FOLDER_LIST_ITEM_ACTIONS } from './constants';
-import type { FolderResource } from '../layouts/ResourcesListLayout.vue';
-import { type ProjectIcon, ProjectTypes } from '@/types/projects.types';
-import { useI18n } from '@/composables/useI18n';
+import { ProjectTypes, type Project } from '@/types/projects.types';
+import { useI18n } from '@n8n/i18n';
 import { useRoute, useRouter } from 'vue-router';
 import { VIEWS } from '@/constants';
-import type { UserAction } from '@/Interface';
+import type { FolderResource, UserAction } from '@/Interface';
+import { ResourceType } from '@/utils/projects.utils';
+import type { PathItem } from '@n8n/design-system/components/N8nBreadcrumbs/Breadcrumbs.vue';
+import { useFoldersStore } from '@/stores/folders.store';
+import { type IUser } from 'n8n-workflow';
 
 type Props = {
 	data: FolderResource;
-	actions: UserAction[];
+	personalProject: Project | null;
+	actions: Array<UserAction<IUser>>;
 	readOnly?: boolean;
+	showOwnershipBadge?: boolean;
 };
 
 const props = withDefaults(defineProps<Props>(), {
 	actions: () => [],
 	readOnly: true,
+	showOwnershipBadge: false,
 });
 
 const i18n = useI18n();
 const route = useRoute();
 const router = useRouter();
+const foldersStore = useFoldersStore();
 
 const emit = defineEmits<{
 	action: [{ action: string; folderId: string }];
 	folderOpened: [{ folder: FolderResource }];
 }>();
 
-const projectIcon = computed<ProjectIcon>(() => {
-	const defaultIcon: ProjectIcon = { type: 'icon', value: 'layer-group' };
-	if (props.data.homeProject?.type === ProjectTypes.Personal) {
-		return { type: 'icon', value: 'user' };
-	} else if (props.data.homeProject?.type === ProjectTypes.Team) {
-		return props.data.homeProject.icon ?? defaultIcon;
-	}
-	return defaultIcon;
+const hiddenBreadcrumbsItemsAsync = ref<Promise<PathItem[]>>(new Promise(() => {}));
+
+const cachedHiddenBreadcrumbsItems = ref<PathItem[]>([]);
+
+const resourceTypeLabel = computed(() => i18n.baseText('generic.folder').toLowerCase());
+
+const cardUrl = computed(() => {
+	return getFolderUrl(props.data.id);
 });
 
 const projectName = computed(() => {
@@ -45,8 +52,28 @@ const projectName = computed(() => {
 	return props.data.homeProject?.name;
 });
 
-const cardUrl = computed(() => {
-	return getFolderUrl(props.data.id);
+const cardBreadcrumbs = computed<PathItem[]>(() => {
+	if (props.data.parentFolder) {
+		return [
+			{
+				id: props.data.parentFolder.id,
+				name: props.data.parentFolder.name,
+				label: props.data.parentFolder.name,
+				href: router.resolve({
+					name: VIEWS.PROJECTS_FOLDERS,
+					params: {
+						projectId: props.data.homeProject?.id,
+						folderId: props.data.parentFolder.id,
+					},
+				}).href,
+			},
+		];
+	}
+	return [];
+});
+
+const showCardBreadcrumbs = computed(() => {
+	return props.showOwnershipBadge && cardBreadcrumbs.value.length;
 });
 
 const getFolderUrl = (folderId: string) => {
@@ -68,25 +95,49 @@ const onAction = async (action: string) => {
 	}
 	emit('action', { action, folderId: props.data.id });
 };
+
+const fetchHiddenBreadCrumbsItems = async () => {
+	if (!props.data.homeProject?.id || !projectName.value || !props.data.parentFolder) {
+		hiddenBreadcrumbsItemsAsync.value = Promise.resolve([]);
+	} else {
+		if (cachedHiddenBreadcrumbsItems.value.length) {
+			hiddenBreadcrumbsItemsAsync.value = Promise.resolve(cachedHiddenBreadcrumbsItems.value);
+			return;
+		}
+		const loadedItem = foldersStore.getHiddenBreadcrumbsItems(
+			{ id: props.data.homeProject.id, name: projectName.value },
+			props.data.parentFolder.id,
+		);
+		hiddenBreadcrumbsItemsAsync.value = loadedItem;
+		cachedHiddenBreadcrumbsItems.value = await loadedItem;
+	}
+};
+
+const onBreadcrumbItemClick = async (item: PathItem) => {
+	if (item.href) {
+		await router.push(item.href);
+	}
+};
 </script>
 
 <template>
 	<div data-test-id="folder-card">
-		<router-link :to="cardUrl" @click="() => emit('folderOpened', { folder: props.data })">
-			<n8n-card :class="$style.card">
+		<RouterLink :to="cardUrl" @click="() => emit('folderOpened', { folder: props.data })">
+			<N8nCard :class="$style.card">
 				<template #prepend>
-					<n8n-icon
+					<N8nIcon
 						data-test-id="folder-card-icon"
 						:class="$style['folder-icon']"
 						icon="folder"
 						size="xlarge"
+						:stroke-width="1"
 					/>
 				</template>
 				<template #header>
 					<div :class="$style['card-header']">
-						<n8n-heading tag="h2" bold size="small" data-test-id="folder-card-name">
+						<N8nHeading tag="h2" bold size="small" data-test-id="folder-card-name">
 							{{ data.name }}
-						</n8n-heading>
+						</N8nHeading>
 						<N8nBadge v-if="readOnly" class="ml-3xs" theme="tertiary" bold>
 							{{ i18n.baseText('workflows.item.readonly') }}
 						</N8nBadge>
@@ -94,7 +145,7 @@ const onAction = async (action: string) => {
 				</template>
 				<template #footer>
 					<div :class="$style['card-footer']">
-						<n8n-text
+						<N8nText
 							v-if="data.workflowCount > 0"
 							size="small"
 							color="text-light"
@@ -104,17 +155,21 @@ const onAction = async (action: string) => {
 							{{
 								i18n.baseText('generic.workflow', { interpolate: { count: data.workflowCount } })
 							}}
-						</n8n-text>
-						<n8n-text
+						</N8nText>
+						<N8nText
 							v-if="data.subFolderCount > 0"
 							size="small"
 							color="text-light"
 							:class="[$style['info-cell'], $style['info-cell--workflow-count']]"
 							data-test-id="folder-card-workflow-count"
 						>
-							{{ i18n.baseText('generic.folder', { interpolate: { count: data.subFolderCount } }) }}
-						</n8n-text>
-						<n8n-text
+							{{
+								i18n.baseText('generic.folderCount', {
+									interpolate: { count: data.subFolderCount },
+								})
+							}}
+						</N8nText>
+						<N8nText
 							size="small"
 							color="text-light"
 							:class="[$style['info-cell'], $style['info-cell--updated']]"
@@ -122,8 +177,8 @@ const onAction = async (action: string) => {
 						>
 							{{ i18n.baseText('workerList.item.lastUpdated') }}
 							<TimeAgo :date="String(data.updatedAt)" />
-						</n8n-text>
-						<n8n-text
+						</N8nText>
+						<N8nText
 							size="small"
 							color="text-light"
 							:class="[$style['info-cell'], $style['info-cell--created']]"
@@ -131,22 +186,45 @@ const onAction = async (action: string) => {
 						>
 							{{ i18n.baseText('workflows.item.created') }}
 							<TimeAgo :date="String(data.createdAt)" />
-						</n8n-text>
+						</N8nText>
 					</div>
 				</template>
 				<template #append>
 					<div :class="$style['card-actions']" @click.prevent>
-						<div v-if="data.homeProject" :class="$style['project-pill']">
-							<div :class="$style['home-project']" data-test-id="folder-card-home-project">
-								<n8n-link :to="`/projects/${data.homeProject.id}`">
-									<ProjectIcon :icon="projectIcon" :border-less="true" size="mini" />
-									<n8n-text size="small" :compact="true" :bold="true" color="text-base">
-										{{ projectName }}
-									</n8n-text>
-								</n8n-link>
-							</div>
+						<div v-if="data.homeProject && showOwnershipBadge">
+							<ProjectCardBadge
+								:class="{
+									[$style.cardBadge]: true,
+									[$style['with-breadcrumbs']]: showCardBreadcrumbs,
+								}"
+								:resource="data"
+								:resource-type="ResourceType.Workflow"
+								:resource-type-label="resourceTypeLabel"
+								:personal-project="personalProject"
+								:show-badge-border="false"
+							>
+								<div v-if="showCardBreadcrumbs" :class="$style.breadcrumbs">
+									<N8nBreadcrumbs
+										:items="cardBreadcrumbs"
+										:hidden-items="
+											data.parentFolder?.parentFolderId !== null
+												? hiddenBreadcrumbsItemsAsync
+												: undefined
+										"
+										:path-truncated="data.parentFolder?.parentFolderId !== null"
+										:highlight-last-item="false"
+										hidden-items-trigger="hover"
+										theme="small"
+										data-test-id="folder-card-breadcrumbs"
+										@tooltip-opened="fetchHiddenBreadCrumbsItems"
+										@item-selected="onBreadcrumbItemClick"
+									>
+										<template #prepend></template>
+									</N8nBreadcrumbs>
+								</div>
+							</ProjectCardBadge>
 						</div>
-						<n8n-action-toggle
+						<N8nActionToggle
 							v-if="actions.length"
 							:actions="actions"
 							theme="dark"
@@ -155,8 +233,8 @@ const onAction = async (action: string) => {
 						/>
 					</div>
 				</template>
-			</n8n-card>
-		</router-link>
+			</N8nCard>
+		</RouterLink>
 	</div>
 </template>
 
@@ -200,24 +278,18 @@ const onAction = async (action: string) => {
 	}
 }
 
+.cardBadge.with-breadcrumbs {
+	:global(.n8n-badge) {
+		padding-right: 0;
+	}
+	:global(.n8n-breadcrumbs) {
+		padding-left: var(--spacing-5xs);
+	}
+}
+
 .card-actions {
 	display: flex;
 	gap: var(--spacing-xs);
-}
-
-.project-pill {
-	display: flex;
-	align-items: center;
-	padding: var(--spacing-4xs) var(--spacing-2xs);
-	border: var(--border-base);
-	border-radius: var(--border-radius-base);
-}
-
-.home-project span {
-	display: flex;
-	align-items: center;
-	gap: var(--spacing-3xs);
-	color: var(—color-text-base);
 }
 
 @include mixins.breakpoint('sm-and-down') {

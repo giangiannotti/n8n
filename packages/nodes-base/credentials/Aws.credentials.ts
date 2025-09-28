@@ -11,7 +11,17 @@ import type {
 } from 'n8n-workflow';
 import { isObjectEmpty } from 'n8n-workflow';
 
-export const regions = [
+type RegionData = {
+	name: string;
+	displayName: string;
+	location: string;
+	domain?: string;
+};
+
+const chinaDomain = 'amazonaws.com.cn';
+const globalDomain = 'amazonaws.com';
+
+export const regions: RegionData[] = [
 	{
 		name: 'af-south-1',
 		displayName: 'Africa',
@@ -91,11 +101,13 @@ export const regions = [
 		name: 'cn-north-1',
 		displayName: 'China',
 		location: 'Beijing',
+		domain: chinaDomain,
 	},
 	{
 		name: 'cn-northwest-1',
 		displayName: 'China',
 		location: 'Ningxia',
+		domain: chinaDomain,
 	},
 	{
 		name: 'eu-central-1',
@@ -211,12 +223,18 @@ export type AwsCredentialsType = {
 	ssmEndpoint?: string;
 };
 
+function getAwsDomain(region: AWSRegion): string {
+	return regions.find((r) => r.name === region)?.domain ?? globalDomain;
+}
+
 // Some AWS services are global and don't have a region
 // https://docs.aws.amazon.com/general/latest/gr/rande.html#global-endpoints
 // Example: iam.amazonaws.com (global), s3.us-east-1.amazonaws.com (regional)
 function parseAwsUrl(url: URL): { region: AWSRegion | null; service: string } {
-	const [service, region] = url.hostname.replace('amazonaws.com', '').split('.');
-	return { service, region: region as AWSRegion };
+	const hostname = url.hostname;
+	// Handle both .amazonaws.com and .amazonaws.com.cn domains
+	const [service, region] = hostname.replace(/\.amazonaws\.com.*$/, '').split('.');
+	return { service, region };
 }
 
 export class Aws implements ICredentialType {
@@ -436,12 +454,11 @@ export class Aws implements ICredentialType {
 					endpointString = credentials.sesEndpoint;
 				} else if (service === 'rekognition' && credentials.rekognitionEndpoint) {
 					endpointString = credentials.rekognitionEndpoint;
-				} else if (service === 'sqs' && credentials.sqsEndpoint) {
-					endpointString = credentials.sqsEndpoint;
-				} else if (service) {
-					endpointString = `https://${service}.${region}.amazonaws.com`;
 				} else if (service === 'ssm' && credentials.ssmEndpoint) {
 					endpointString = credentials.ssmEndpoint;
+				} else if (service) {
+					const domain = getAwsDomain(region);
+					endpointString = `https://${service}.${region}.${domain}`;
 				}
 				endpoint = new URL(endpointString!.replace('{region}', region) + path);
 			} else {
@@ -476,15 +493,30 @@ export class Aws implements ICredentialType {
 
 		path = endpoint.pathname + endpoint.search;
 
+		// ! aws4.sign *must* have the body to sign, but we might have .form instead of .body
+		const requestWithForm = requestOptions as unknown as { form?: Record<string, string> };
+		let bodyContent = body !== '' ? body : undefined;
+		let contentTypeHeader: string | undefined = undefined;
+		if (requestWithForm.form) {
+			const params = new URLSearchParams();
+			for (const key in requestWithForm.form) {
+				params.append(key, requestWithForm.form[key]);
+			}
+			bodyContent = params.toString();
+			contentTypeHeader = 'application/x-www-form-urlencoded';
+		}
 		const signOpts = {
 			...requestOptions,
-			headers: requestOptions.headers ?? {},
+			headers: {
+				...(requestOptions.headers ?? {}),
+				...(contentTypeHeader && { 'content-type': contentTypeHeader }),
+			},
 			host: endpoint.host,
 			method,
 			path,
-			body: body !== '' ? body : undefined,
+			body: bodyContent,
 			region,
-		} as Request;
+		} as unknown as Request;
 
 		const securityHeaders = {
 			accessKeyId: `${credentials.accessKeyId}`.trim(),
@@ -512,7 +544,9 @@ export class Aws implements ICredentialType {
 
 	test: ICredentialTestRequest = {
 		request: {
-			baseURL: '=https://sts.{{$credentials.region}}.amazonaws.com',
+			baseURL:
+				// eslint-disable-next-line n8n-local-rules/no-interpolation-in-regular-string
+				'={{$credentials.region.startsWith("cn-") ? `https://sts.${$credentials.region}.amazonaws.com.cn` : `https://sts.${$credentials.region}.amazonaws.com`}}',
 			url: '?Action=GetCallerIdentity&Version=2011-06-15',
 			method: 'POST',
 		},

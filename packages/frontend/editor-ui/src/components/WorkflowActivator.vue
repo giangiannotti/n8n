@@ -5,15 +5,23 @@ import { useWorkflowsStore } from '@/stores/workflows.store';
 import { getActivatableTriggerNodes } from '@/utils/nodeTypesUtils';
 import type { VNode } from 'vue';
 import { computed, h, watch } from 'vue';
-import { useI18n } from '@/composables/useI18n';
-import type { PermissionsRecord } from '@/permissions';
-import { EXECUTE_WORKFLOW_TRIGGER_NODE_TYPE, PLACEHOLDER_EMPTY_WORKFLOW_ID } from '@/constants';
+import { useI18n } from '@n8n/i18n';
+import type { PermissionsRecord } from '@n8n/permissions';
+import {
+	WORKFLOW_ACTIVATION_CONFLICTING_WEBHOOK_MODAL_KEY,
+	EXECUTE_WORKFLOW_TRIGGER_NODE_TYPE,
+	PLACEHOLDER_EMPTY_WORKFLOW_ID,
+} from '@/constants';
 import WorkflowActivationErrorMessage from './WorkflowActivationErrorMessage.vue';
 import { useCredentialsStore } from '@/stores/credentials.store';
 import type { INodeUi, IUsedCredential } from '@/Interface';
 import { OPEN_AI_API_CREDENTIAL_TYPE } from 'n8n-workflow';
+import { useUIStore } from '@/stores/ui.store';
+
+import { useWorkflowHelpers } from '@/composables/useWorkflowHelpers';
 
 const props = defineProps<{
+	isArchived: boolean;
 	workflowActive: boolean;
 	workflowId: string;
 	workflowPermissions: PermissionsRecord['workflow'];
@@ -25,6 +33,10 @@ const emit = defineEmits<{
 
 const { showMessage } = useToast();
 const workflowActivate = useWorkflowActivate();
+
+const uiStore = useUIStore();
+
+const workflowHelpers = useWorkflowHelpers();
 
 const i18n = useI18n();
 const workflowsStore = useWorkflowsStore();
@@ -47,9 +59,12 @@ const isCurrentWorkflow = computed((): boolean => {
 	return workflowsStore.workflowId === props.workflowId;
 });
 
+const foundTriggers = computed(() =>
+	getActivatableTriggerNodes(workflowsStore.workflowTriggerNodes),
+);
+
 const containsTrigger = computed((): boolean => {
-	const foundTriggers = getActivatableTriggerNodes(workflowsStore.workflowTriggerNodes);
-	return foundTriggers.length > 0;
+	return foundTriggers.value.length > 0;
 });
 
 const containsOnlyExecuteWorkflowTrigger = computed((): boolean => {
@@ -71,6 +86,10 @@ const isNewWorkflow = computed(
 );
 
 const disabled = computed((): boolean => {
+	if (props.isArchived) {
+		return true;
+	}
+
 	if (isNewWorkflow.value || isCurrentWorkflow.value) {
 		return !props.workflowActive && !containsTrigger.value;
 	}
@@ -114,10 +133,31 @@ const shouldShowFreeAiCreditsWarning = computed((): boolean => {
 });
 
 async function activeChanged(newActiveState: boolean) {
+	if (!isWorkflowActive.value) {
+		const conflictData = await workflowHelpers.checkConflictingWebhooks(props.workflowId);
+
+		if (conflictData) {
+			const { trigger, conflict } = conflictData;
+			const conflictingWorkflow = await workflowsStore.fetchWorkflow(conflict.workflowId);
+
+			uiStore.openModalWithData({
+				name: WORKFLOW_ACTIVATION_CONFLICTING_WEBHOOK_MODAL_KEY,
+				data: {
+					triggerType: trigger.type,
+					workflowName: conflictingWorkflow.name,
+					...conflict,
+				},
+			});
+
+			return;
+		}
+	}
+
 	const newState = await workflowActivate.updateWorkflowActivation(
 		props.workflowId,
 		newActiveState,
 	);
+
 	emit('update:workflowActive', { id: props.workflowId, active: newState });
 }
 
@@ -167,31 +207,33 @@ watch(
 <template>
 	<div class="workflow-activator">
 		<div :class="$style.activeStatusText" data-test-id="workflow-activator-status">
-			<n8n-text
+			<N8nText
 				v-if="workflowActive"
 				:color="couldNotBeStarted ? 'danger' : 'success'"
 				size="small"
 				bold
 			>
 				{{ i18n.baseText('workflowActivator.active') }}
-			</n8n-text>
-			<n8n-text v-else color="text-base" size="small" bold>
+			</N8nText>
+			<N8nText v-else color="text-base" size="small" bold>
 				{{ i18n.baseText('workflowActivator.inactive') }}
-			</n8n-text>
+			</N8nText>
 		</div>
-		<n8n-tooltip :disabled="!disabled" placement="bottom">
+		<N8nTooltip :disabled="!disabled" placement="bottom">
 			<template #content>
 				<div>
 					{{
 						i18n.baseText(
-							containsOnlyExecuteWorkflowTrigger
-								? 'workflowActivator.thisWorkflowHasOnlyOneExecuteWorkflowTriggerNode'
-								: 'workflowActivator.thisWorkflowHasNoTriggerNodes',
+							isArchived
+								? 'workflowActivator.thisWorkflowIsArchived'
+								: containsOnlyExecuteWorkflowTrigger
+									? 'workflowActivator.thisWorkflowHasOnlyOneExecuteWorkflowTriggerNode'
+									: 'workflowActivator.thisWorkflowHasNoTriggerNodes',
 						)
 					}}
 				</div>
 			</template>
-			<el-switch
+			<ElSwitch
 				v-loading="workflowActivate.updatingWorkflowActivation.value"
 				:model-value="workflowActive"
 				:title="
@@ -209,26 +251,25 @@ watch(
 				data-test-id="workflow-activate-switch"
 				@update:model-value="activeChanged"
 			>
-			</el-switch>
-		</n8n-tooltip>
+			</ElSwitch>
+		</N8nTooltip>
 
 		<div v-if="couldNotBeStarted" class="could-not-be-started">
-			<n8n-tooltip placement="top">
+			<N8nTooltip placement="top">
 				<template #content>
 					<div
 						v-n8n-html="i18n.baseText('workflowActivator.theWorkflowIsSetToBeActiveBut')"
 						@click="displayActivationError"
 					></div>
 				</template>
-				<font-awesome-icon icon="exclamation-triangle" @click="displayActivationError" />
-			</n8n-tooltip>
+				<N8nIcon icon="triangle-alert" @click="displayActivationError" />
+			</N8nTooltip>
 		</div>
 	</div>
 </template>
 
 <style lang="scss" module>
 .activeStatusText {
-	width: 64px; // Required to avoid jumping when changing active state
 	padding-right: var(--spacing-2xs);
 	box-sizing: border-box;
 	display: inline-block;

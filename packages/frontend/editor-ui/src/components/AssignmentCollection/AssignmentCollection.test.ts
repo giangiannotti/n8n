@@ -5,8 +5,8 @@ import userEvent from '@testing-library/user-event';
 import { fireEvent, within } from '@testing-library/vue';
 import * as workflowHelpers from '@/composables/useWorkflowHelpers';
 import AssignmentCollection from './AssignmentCollection.vue';
-import { STORES } from '@/constants';
-import { cleanupAppModals, createAppModals, SETTINGS_STORE_DEFAULT_STATE } from '@/__tests__/utils';
+import { STORES } from '@n8n/stores';
+import { SETTINGS_STORE_DEFAULT_STATE } from '@/__tests__/utils';
 
 const DEFAULT_SETUP = {
 	pinia: createTestingPinia({
@@ -64,13 +64,8 @@ async function dropAssignment({
 }
 
 describe('AssignmentCollection.vue', () => {
-	beforeEach(() => {
-		createAppModals();
-	});
-
 	afterEach(() => {
 		vi.clearAllMocks();
-		cleanupAppModals();
 	});
 
 	it('renders empty state properly', async () => {
@@ -150,5 +145,70 @@ describe('AssignmentCollection.vue', () => {
 		expect(getAssignmentType(assignments[2])).toEqual('Number');
 		expect(getAssignmentType(assignments[3])).toEqual('Object');
 		expect(getAssignmentType(assignments[4])).toEqual('Array');
+	});
+
+	describe('defaultType prop', () => {
+		it('should use string as default type when no defaultType is specified', async () => {
+			const { getByTestId, findAllByTestId } = renderComponent();
+
+			await userEvent.click(getByTestId('assignment-collection-drop-area'));
+
+			const assignments = await findAllByTestId('assignment');
+			expect(assignments.length).toBe(1);
+			expect(getAssignmentType(assignments[0])).toEqual('String');
+		});
+
+		it('should use specified defaultType when adding a new assignment manually', async () => {
+			const { getByTestId, findAllByTestId } = renderComponent({
+				props: {
+					defaultType: 'number',
+				},
+			});
+
+			await userEvent.click(getByTestId('assignment-collection-drop-area'));
+
+			const assignments = await findAllByTestId('assignment');
+			expect(assignments.length).toBe(1);
+			expect(getAssignmentType(assignments[0])).toEqual('Number');
+		});
+
+		it('should use defaultType for drag and drop when disableType is true', async () => {
+			const { getByTestId, findAllByTestId } = renderComponent({
+				props: {
+					defaultType: 'number',
+					disableType: true,
+				},
+			});
+
+			const dropArea = getByTestId('drop-area');
+
+			// Even though we're dropping a string value, it should use number type because of defaultType
+			await dropAssignment({ key: 'stringKey', value: 'stringValue', dropArea });
+
+			const assignments = await findAllByTestId('assignment');
+			expect(assignments.length).toBe(1);
+			expect(getAssignmentType(assignments[0])).toEqual('Number');
+		});
+
+		it('should respect defaultType for all assignments when provided', async () => {
+			const { getByTestId, findAllByTestId } = renderComponent({
+				props: {
+					defaultType: 'boolean',
+				},
+			});
+
+			const dropArea = getByTestId('drop-area');
+
+			await userEvent.click(getByTestId('assignment-collection-drop-area'));
+
+			await dropAssignment({ key: 'stringKey', value: 'stringValue', dropArea });
+			await dropAssignment({ key: 'numberKey', value: 25, dropArea });
+
+			const assignments = await findAllByTestId('assignment');
+			expect(assignments.length).toBe(3);
+			expect(getAssignmentType(assignments[0])).toEqual('Boolean');
+			expect(getAssignmentType(assignments[1])).toEqual('Boolean');
+			expect(getAssignmentType(assignments[2])).toEqual('Boolean');
+		});
 	});
 });

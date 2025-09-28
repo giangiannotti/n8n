@@ -1,9 +1,12 @@
 import { defineStore } from 'pinia';
 import { ref, watch, computed } from 'vue';
 import { useRoute } from 'vue-router';
-import { useRootStore } from '@/stores/root.store';
+import { useRootStore } from '@n8n/stores/useRootStore';
+import * as dataStoreApi from '@/features/dataStore/dataStore.api';
 import * as projectsApi from '@/api/projects.api';
+import * as workflowsApi from '@/api/workflows';
 import * as workflowsEEApi from '@/api/workflows.ee';
+import * as credentialsApi from '@/api/credentials';
 import * as credentialsEEApi from '@/api/credentials.ee';
 import type { Project, ProjectListItem, ProjectsCount } from '@/types/projects.types';
 import { ProjectTypes } from '@/types/projects.types';
@@ -11,11 +14,17 @@ import { useSettingsStore } from '@/stores/settings.store';
 import { hasPermission } from '@/utils/rbac/permissions';
 import type { IWorkflowDb } from '@/Interface';
 import { useCredentialsStore } from '@/stores/credentials.store';
-import { STORES } from '@/constants';
+import { STORES } from '@n8n/stores';
 import { useUsersStore } from '@/stores/users.store';
-import { getResourcePermissions } from '@/permissions';
+import { getResourcePermissions } from '@n8n/permissions';
 import type { CreateProjectDto, UpdateProjectDto } from '@n8n/api-types';
 import { useSourceControlStore } from '@/stores/sourceControl.store';
+
+export type ResourceCounts = {
+	credentials: number;
+	workflows: number;
+	dataTables: number;
+};
 
 export const useProjectsStore = defineStore(STORES.PROJECTS, () => {
 	const route = useRoute();
@@ -115,24 +124,47 @@ export const useProjectsStore = defineStore(STORES.PROJECTS, () => {
 		return newProject;
 	};
 
-	const updateProject = async (
-		id: Project['id'],
-		projectData: Required<UpdateProjectDto>,
-	): Promise<void> => {
-		await projectsApi.updateProject(rootStore.restApiContext, id, projectData);
+	const updateProject = async (id: Project['id'], projectData: UpdateProjectDto): Promise<void> => {
+		const { name, icon, description } = projectData;
+		const payload: UpdateProjectDto = {};
+		if (name !== undefined) payload.name = name;
+		if (icon !== undefined) payload.icon = icon;
+		if (description !== undefined) payload.description = description;
+		await projectsApi.updateProject(rootStore.restApiContext, id, payload);
 		const projectIndex = myProjects.value.findIndex((p) => p.id === id);
-		const { name, icon } = projectData;
+		const { name: nm, icon: ic, description: desc } = { name, icon, description };
 		if (projectIndex !== -1) {
-			myProjects.value[projectIndex].name = name;
-			myProjects.value[projectIndex].icon = icon;
+			if (nm !== undefined) myProjects.value[projectIndex].name = nm;
+			if (ic !== undefined) myProjects.value[projectIndex].icon = ic;
+			if (desc !== undefined) myProjects.value[projectIndex].description = desc;
 		}
 		if (currentProject.value) {
-			currentProject.value.name = name;
-			currentProject.value.icon = icon;
+			if (nm !== undefined) currentProject.value.name = nm;
+			if (ic !== undefined) currentProject.value.icon = ic;
+			if (desc !== undefined) currentProject.value.description = desc;
 		}
-		if (projectData.relations) {
-			await getProject(id);
-		}
+	};
+
+	const addMember = async (
+		projectId: string,
+		{ userId, role }: { userId: string; role: string },
+	): Promise<void> => {
+		await projectsApi.addProjectMembers(rootStore.restApiContext, projectId, [{ userId, role }]);
+		await getProject(projectId);
+	};
+
+	const updateMemberRole = async (
+		projectId: string,
+		userId: string,
+		role: string,
+	): Promise<void> => {
+		await projectsApi.updateProjectMemberRole(rootStore.restApiContext, projectId, userId, role);
+		await getProject(projectId);
+	};
+
+	const removeMember = async (projectId: string, userId: string): Promise<void> => {
+		await projectsApi.deleteProjectMember(rootStore.restApiContext, projectId, userId);
+		await getProject(projectId);
 	};
 
 	const deleteProject = async (projectId: string, transferId?: string): Promise<void> => {
@@ -146,15 +178,40 @@ export const useProjectsStore = defineStore(STORES.PROJECTS, () => {
 	};
 
 	const setProjectNavActiveIdByWorkflowHomeProject = async (
-		homeProject?: IWorkflowDb['homeProject'],
+		workflowHomeProject?: IWorkflowDb['homeProject'],
+		sharedWithProjects?: IWorkflowDb['sharedWithProjects'],
 	) => {
-		if (homeProject?.type === ProjectTypes.Personal) {
-			projectNavActiveId.value = 'home';
-		} else {
-			projectNavActiveId.value = homeProject?.id ?? null;
-			if (homeProject?.id && !currentProjectId.value) {
-				await getProject(homeProject?.id);
+		// For personal shared workflows, we need to show "Shared with you"
+		const isSharedWithMe =
+			personalProject.value?.id !== workflowHomeProject?.id &&
+			workflowHomeProject?.type === ProjectTypes.Personal &&
+			sharedWithProjects?.some((project) => project.id === personalProject.value?.id);
+
+		if (isSharedWithMe) {
+			projectNavActiveId.value = 'shared';
+			setCurrentProject(null);
+			return;
+		}
+
+		if (workflowHomeProject?.type === ProjectTypes.Personal) {
+			// Handle personal projects
+			const isOwnPersonalProject = personalProject.value?.id === workflowHomeProject?.id;
+			// If it's current user's personal project, set it as current project
+			if (isOwnPersonalProject) {
+				projectNavActiveId.value = workflowHomeProject?.id ?? null;
+				currentProject.value = personalProject.value;
+				return;
+			} else {
+				// Else default to overview page
+				projectNavActiveId.value = 'home';
+				return;
 			}
+		}
+
+		// Handle team projects
+		projectNavActiveId.value = workflowHomeProject?.id ?? null;
+		if (workflowHomeProject?.id && !currentProjectId.value) {
+			await getProject(workflowHomeProject?.id);
 		}
 	};
 
@@ -162,11 +219,13 @@ export const useProjectsStore = defineStore(STORES.PROJECTS, () => {
 		resourceType: 'workflow' | 'credential',
 		resourceId: string,
 		projectId: string,
+		parentFolderId?: string,
 		shareCredentials?: string[],
 	) => {
 		if (resourceType === 'workflow') {
 			await workflowsEEApi.moveWorkflowToProject(rootStore.restApiContext, resourceId, {
 				destinationProjectId: projectId,
+				destinationParentFolderId: parentFolderId,
 				shareCredentials,
 			});
 		} else {
@@ -179,6 +238,20 @@ export const useProjectsStore = defineStore(STORES.PROJECTS, () => {
 		}
 	};
 
+	const getResourceCounts = async (projectId: string): Promise<ResourceCounts> => {
+		const [credentials, workflows, dataTables] = await Promise.all([
+			credentialsApi.getAllCredentials(rootStore.restApiContext, { projectId }),
+			workflowsApi.getWorkflows(rootStore.restApiContext, { projectId }),
+			dataStoreApi.fetchDataStoresApi(rootStore.restApiContext, projectId),
+		]);
+
+		return {
+			credentials: credentials.length,
+			workflows: workflows.count,
+			dataTables: dataTables.count,
+		};
+	};
+
 	watch(
 		route,
 		async (newRoute) => {
@@ -186,6 +259,11 @@ export const useProjectsStore = defineStore(STORES.PROJECTS, () => {
 
 			if (newRoute?.path?.includes('home')) {
 				projectNavActiveId.value = 'home';
+				setCurrentProject(null);
+			}
+
+			if (newRoute?.path?.includes('shared')) {
+				projectNavActiveId.value = 'shared';
 				setCurrentProject(null);
 			}
 
@@ -231,9 +309,13 @@ export const useProjectsStore = defineStore(STORES.PROJECTS, () => {
 		getProject,
 		createProject,
 		updateProject,
+		addMember,
+		updateMemberRole,
+		removeMember,
 		deleteProject,
 		getProjectsCount,
 		setProjectNavActiveIdByWorkflowHomeProject,
 		moveResourceToProject,
+		getResourceCounts,
 	};
 });

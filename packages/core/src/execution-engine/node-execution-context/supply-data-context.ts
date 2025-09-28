@@ -16,8 +16,9 @@ import type {
 	Workflow,
 	WorkflowExecuteMode,
 	NodeConnectionType,
+	ISourceData,
 } from 'n8n-workflow';
-import { createDeferredPromise, NodeConnectionTypes } from 'n8n-workflow';
+import { createDeferredPromise, jsonParse, NodeConnectionTypes } from 'n8n-workflow';
 
 import { BaseExecuteContext } from './base-execute-context';
 import {
@@ -28,9 +29,10 @@ import {
 } from './utils/binary-helper-functions';
 import { constructExecutionMetaData } from './utils/construct-execution-metadata';
 import { copyInputItems } from './utils/copy-input-items';
+import { getDataStoreHelperFunctions } from './utils/data-store-helper-functions';
 import { getDeduplicationHelperFunctions } from './utils/deduplication-helper-functions';
 import { getFileSystemHelperFunctions } from './utils/file-system-helper-functions';
-// eslint-disable-next-line import/no-cycle
+// eslint-disable-next-line import-x/no-cycle
 import { getInputConnectionData } from './utils/get-input-connection-data';
 import { normalizeItems } from './utils/normalize-items';
 import { getRequestHelperFunctions } from './utils/request-helper-functions';
@@ -41,6 +43,8 @@ export class SupplyDataContext extends BaseExecuteContext implements ISupplyData
 	readonly helpers: ISupplyDataFunctions['helpers'];
 
 	readonly getNodeParameter: ISupplyDataFunctions['getNodeParameter'];
+
+	readonly parentNode?: INode;
 
 	constructor(
 		workflow: Workflow,
@@ -55,6 +59,7 @@ export class SupplyDataContext extends BaseExecuteContext implements ISupplyData
 		executeData: IExecuteData,
 		private readonly closeFunctions: CloseFunction[],
 		abortSignal?: AbortSignal,
+		parentNode?: INode,
 	) {
 		super(
 			workflow,
@@ -69,6 +74,8 @@ export class SupplyDataContext extends BaseExecuteContext implements ISupplyData
 			abortSignal,
 		);
 
+		this.parentNode = parentNode;
+
 		this.helpers = {
 			createDeferredPromise,
 			copyInputItems,
@@ -82,6 +89,7 @@ export class SupplyDataContext extends BaseExecuteContext implements ISupplyData
 			...getSSHTunnelFunctions(),
 			...getFileSystemHelperFunctions(node),
 			...getBinaryHelperFunctions(additionalData, workflow.id),
+			...getDataStoreHelperFunctions(additionalData, workflow, node),
 			...getDeduplicationHelperFunctions(workflow, node),
 			assertBinaryData: (itemIndex, propertyName) =>
 				assertBinaryData(inputData, node, itemIndex, propertyName, 0),
@@ -126,6 +134,7 @@ export class SupplyDataContext extends BaseExecuteContext implements ISupplyData
 			this.executeData,
 			this.closeFunctions,
 			this.abortSignal,
+			this.parentNode,
 		);
 		context.addInputData(NodeConnectionTypes.AiTool, replacements.inputData);
 		return context;
@@ -160,16 +169,19 @@ export class SupplyDataContext extends BaseExecuteContext implements ISupplyData
 		return super.getInputItems(inputIndex, connectionType) ?? [];
 	}
 
+	getNextRunIndex(): number {
+		const nodeName = this.node.name;
+		return this.runExecutionData.resultData.runData[nodeName]?.length ?? 0;
+	}
+
 	/** @deprecated create a context object with inputData for every runIndex */
 	addInputData(
 		connectionType: AINodeConnectionType,
 		data: INodeExecutionData[][],
+		runIndex?: number,
 	): { index: number } {
 		const nodeName = this.node.name;
-		let currentNodeRunIndex = 0;
-		if (this.runExecutionData.resultData.runData.hasOwnProperty(nodeName)) {
-			currentNodeRunIndex = this.runExecutionData.resultData.runData[nodeName].length;
-		}
+		const currentNodeRunIndex = this.getNextRunIndex();
 
 		this.addExecutionDataFunctions(
 			'input',
@@ -177,6 +189,8 @@ export class SupplyDataContext extends BaseExecuteContext implements ISupplyData
 			connectionType,
 			nodeName,
 			currentNodeRunIndex,
+			undefined,
+			runIndex,
 		).catch((error) => {
 			this.logger.warn(
 				`There was a problem logging input data of node "${nodeName}": ${
@@ -195,6 +209,7 @@ export class SupplyDataContext extends BaseExecuteContext implements ISupplyData
 		currentNodeRunIndex: number,
 		data: INodeExecutionData[][] | ExecutionBaseError,
 		metadata?: ITaskMetadata,
+		sourceNodeRunIndex?: number,
 	): void {
 		const nodeName = this.node.name;
 		this.addExecutionDataFunctions(
@@ -204,6 +219,7 @@ export class SupplyDataContext extends BaseExecuteContext implements ISupplyData
 			nodeName,
 			currentNodeRunIndex,
 			metadata,
+			sourceNodeRunIndex,
 		).catch((error) => {
 			this.logger.warn(
 				`There was a problem logging output data of node "${nodeName}": ${
@@ -221,21 +237,32 @@ export class SupplyDataContext extends BaseExecuteContext implements ISupplyData
 		sourceNodeName: string,
 		currentNodeRunIndex: number,
 		metadata?: ITaskMetadata,
+		sourceNodeRunIndex?: number,
 	): Promise<void> {
 		const {
 			additionalData,
 			runExecutionData,
-			runIndex: sourceNodeRunIndex,
+			runIndex: currentRunIndex,
 			node: { name: nodeName },
 		} = this;
 
 		let taskData: ITaskData | undefined;
+		const source: ISourceData[] = this.parentNode
+			? [
+					{
+						previousNode: this.parentNode.name,
+						previousNodeRun: sourceNodeRunIndex ?? currentRunIndex,
+					},
+				]
+			: [];
+
 		if (type === 'input') {
 			taskData = {
-				startTime: new Date().getTime(),
+				startTime: Date.now(),
 				executionTime: 0,
+				executionIndex: additionalData.currentNodeExecutionIndex++,
 				executionStatus: 'running',
-				source: [null],
+				source,
 			};
 		} else {
 			// At the moment we expect that there is always an input sent before the output
@@ -248,12 +275,19 @@ export class SupplyDataContext extends BaseExecuteContext implements ISupplyData
 				return;
 			}
 			taskData.metadata = metadata;
+			taskData.source = source;
 		}
 		taskData = taskData!;
 
 		if (data instanceof Error) {
-			taskData.executionStatus = 'error';
-			taskData.error = data;
+			// if running node was already marked as "canceled" because execution was aborted
+			// leave as "canceled" instead of showing "This operation was aborted" error
+			if (
+				!(type === 'output' && this.abortSignal?.aborted && taskData.executionStatus === 'canceled')
+			) {
+				taskData.executionStatus = 'error';
+				taskData.error = data;
+			}
 		} else {
 			if (type === 'output') {
 				taskData.executionStatus = 'success';
@@ -277,10 +311,10 @@ export class SupplyDataContext extends BaseExecuteContext implements ISupplyData
 			}
 
 			runExecutionData.resultData.runData[nodeName][currentNodeRunIndex] = taskData;
-			await additionalData.hooks?.runHook('nodeExecuteBefore', [nodeName]);
+			await additionalData.hooks?.runHook('nodeExecuteBefore', [nodeName, taskData]);
 		} else {
 			// Outputs
-			taskData.executionTime = new Date().getTime() - taskData.startTime;
+			taskData.executionTime = Date.now() - taskData.startTime;
 
 			await additionalData.hooks?.runHook('nodeExecuteAfter', [
 				nodeName,
@@ -298,17 +332,30 @@ export class SupplyDataContext extends BaseExecuteContext implements ISupplyData
 				runExecutionData.executionData!.metadata[sourceNodeName] = [];
 				sourceTaskData = runExecutionData.executionData!.metadata[sourceNodeName];
 			}
-
-			if (!sourceTaskData[sourceNodeRunIndex]) {
-				sourceTaskData[sourceNodeRunIndex] = {
+			if (!sourceTaskData[currentNodeRunIndex]) {
+				sourceTaskData[currentNodeRunIndex] = {
 					subRun: [],
 				};
 			}
 
-			sourceTaskData[sourceNodeRunIndex].subRun!.push({
+			sourceTaskData[currentNodeRunIndex].subRun!.push({
 				node: nodeName,
 				runIndex: currentNodeRunIndex,
 			});
+		}
+	}
+
+	logNodeOutput(...args: unknown[]): void {
+		if (this.mode === 'manual') {
+			const parsedLogArgs = args.map((arg) =>
+				typeof arg === 'string' ? jsonParse(arg, { fallbackValue: arg }) : arg,
+			);
+			this.sendMessageToUI(...parsedLogArgs);
+			return;
+		}
+
+		if (process.env.CODE_ENABLE_STDOUT === 'true') {
+			console.log(`[Workflow "${this.getWorkflow().id}"][Node "${this.node.name}"]`, ...args);
 		}
 	}
 }

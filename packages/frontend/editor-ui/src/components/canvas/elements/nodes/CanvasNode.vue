@@ -17,8 +17,6 @@ import type {
 	CanvasEventBusEvents,
 } from '@/types';
 import { CanvasConnectionMode, CanvasNodeRenderType } from '@/types';
-import NodeIcon from '@/components/NodeIcon.vue';
-import { useNodeTypesStore } from '@/stores/nodeTypes.store';
 import CanvasNodeToolbar from '@/components/canvas/elements/nodes/CanvasNodeToolbar.vue';
 import CanvasNodeRenderer from '@/components/canvas/elements/nodes/CanvasNodeRenderer.vue';
 import CanvasHandleRenderer from '@/components/canvas/elements/handles/CanvasHandleRenderer.vue';
@@ -34,8 +32,9 @@ import {
 } from '@/utils/canvasUtils';
 import type { EventBus } from '@n8n/utils/event-bus';
 import { createEventBus } from '@n8n/utils/event-bus';
-import { isEqual } from 'lodash-es';
+import isEqual from 'lodash/isEqual';
 import CanvasNodeTrigger from '@/components/canvas/elements/nodes/render-types/parts/CanvasNodeTrigger.vue';
+import { CONFIGURATION_NODE_RADIUS, GRID_SIZE } from '@/utils/nodeViewUtils';
 
 type Props = NodeProps<CanvasNodeData> & {
 	readOnly?: boolean;
@@ -58,23 +57,23 @@ const emit = defineEmits<{
 	run: [id: string];
 	select: [id: string, selected: boolean];
 	toggle: [id: string];
-	activate: [id: string];
+	activate: [id: string, event: MouseEvent];
 	deactivate: [id: string];
 	'open:contextmenu': [id: string, event: MouseEvent, source: 'node-button' | 'node-right-click'];
 	update: [id: string, parameters: Record<string, unknown>];
 	'update:inputs': [id: string];
 	'update:outputs': [id: string];
 	move: [id: string, position: XYPosition];
+	focus: [id: string];
 }>();
 
 const style = useCssModule();
 
 const props = defineProps<Props>();
 
-const nodeTypesStore = useNodeTypesStore();
 const contextMenu = useContextMenu();
 
-const { connectingHandle } = useCanvas();
+const { connectingHandle, isExperimentalNdvActive } = useCanvas();
 
 /*
   Toolbar slot classes
@@ -98,10 +97,6 @@ const {
 
 const isDisabled = computed(() => props.data.disabled);
 
-const nodeTypeDescription = computed(() => {
-	return nodeTypesStore.getNodeType(props.data.type, props.data.typeVersion);
-});
-
 const classes = computed(() => ({
 	[style.canvasNode]: true,
 	[style.showToolbar]: showToolbar.value,
@@ -113,7 +108,11 @@ const classes = computed(() => ({
 const renderType = computed<CanvasNodeRenderType>(() => props.data.render.type);
 
 const dataTestId = computed(() =>
-	[CanvasNodeRenderType.StickyNote, CanvasNodeRenderType.AddNodes].includes(renderType.value)
+	[
+		CanvasNodeRenderType.StickyNote,
+		CanvasNodeRenderType.AddNodes,
+		CanvasNodeRenderType.AIPrompt,
+	].includes(renderType.value)
 		? undefined
 		: 'canvas-node',
 );
@@ -157,14 +156,6 @@ const mappedOutputs = computed(() => {
 });
 
 /**
- * Node icon
- */
-
-const nodeIconSize = computed(() =>
-	'configuration' in data.value.render.options && data.value.render.options.configuration ? 30 : 40,
-);
-
-/**
  * Endpoints
  */
 
@@ -198,6 +189,12 @@ const createEndpointMappingFn =
 			connectingHandle.value?.nodeId === props.id &&
 			connectingHandle.value?.handleType === handleType &&
 			connectingHandle.value?.handleId === handleId;
+		const offsetValue =
+			position === Position.Bottom
+				? `${CONFIGURATION_NODE_RADIUS + GRID_SIZE * (3 * index)}px`
+				: isExperimentalNdvActive.value && endpoints.length === 1
+					? `${(1 + index) * (GRID_SIZE * 1.5)}px`
+					: `${(100 / (endpoints.length + 1)) * (index + 1)}%`;
 
 		return {
 			...endpoint,
@@ -206,7 +203,7 @@ const createEndpointMappingFn =
 			isConnecting,
 			position,
 			offset: {
-				[offsetAxis]: `${(100 / (endpoints.length + 1)) * (index + 1)}%`,
+				[offsetAxis]: offsetValue,
 			},
 		};
 	};
@@ -255,8 +252,8 @@ function onDisabledToggle() {
 	emit('toggle', props.id);
 }
 
-function onActivate() {
-	emit('activate', props.id);
+function onActivate(id: string, event: MouseEvent) {
+	emit('activate', id, event);
 }
 
 function onDeactivate() {
@@ -276,6 +273,10 @@ function onUpdate(parameters: Record<string, unknown>) {
 
 function onMove(position: XYPosition) {
 	emit('move', props.id, position);
+}
+
+function onFocus(id: string) {
+	emit('focus', id);
 }
 
 function onUpdateClass({ className, add = true }: CanvasNodeEventBusEvents['update:node:class']) {
@@ -302,6 +303,10 @@ provide(CanvasNodeKey, {
 	readOnly,
 	eventBus: canvasNodeEventBus,
 });
+
+const hasToolbar = computed(
+	() => ![CanvasNodeRenderType.AddNodes, CanvasNodeRenderType.AIPrompt].includes(renderType.value),
+);
 
 const showToolbar = computed(() => {
 	const target = contextMenu.target.value;
@@ -388,15 +393,18 @@ onBeforeUnmount(() => {
 		</template>
 
 		<CanvasNodeToolbar
-			v-else-if="nodeTypeDescription"
+			v-else-if="hasToolbar"
 			data-test-id="canvas-node-toolbar"
 			:read-only="readOnly"
 			:class="$style.canvasNodeToolbar"
+			:show-status-icons="isExperimentalNdvActive"
+			:items-class="$style.canvasNodeToolbarItems"
 			@delete="onDelete"
 			@toggle="onDisabledToggle"
 			@run="onRun"
 			@update="onUpdate"
 			@open:contextmenu="onOpenContextMenuFromToolbar"
+			@focus="onFocus"
 		/>
 
 		<CanvasNodeRenderer
@@ -405,15 +413,8 @@ onBeforeUnmount(() => {
 			@move="onMove"
 			@update="onUpdate"
 			@open:contextmenu="onOpenContextMenuFromNode"
-		>
-			<NodeIcon
-				:node-type="nodeTypeDescription"
-				:size="nodeIconSize"
-				:shrink="false"
-				:disabled="isDisabled"
-			/>
-			<!-- @TODO :color-default="iconColorDefault"-->
-		</CanvasNodeRenderer>
+			@delete="onDelete"
+		/>
 
 		<CanvasNodeTrigger
 			v-if="
@@ -425,33 +426,31 @@ onBeforeUnmount(() => {
 			:disabled="isDisabled"
 			:read-only="readOnly"
 			:class="$style.trigger"
+			:is-experimental-ndv-active="isExperimentalNdvActive"
 		/>
 	</div>
 </template>
 
 <style lang="scss" module>
 .canvasNode {
+	.canvasNodeToolbarItems {
+		transition: opacity 0.1s ease-in;
+		opacity: 0;
+	}
+
 	&:hover:not(:has(> .trigger:hover)), // exclude .trigger which has extended hit zone
 	&:focus-within,
 	&.showToolbar {
-		.canvasNodeToolbar {
+		.canvasNodeToolbarItems {
 			opacity: 1;
 		}
 	}
 }
 
 .canvasNodeToolbar {
-	transition: opacity 0.1s ease-in;
 	position: absolute;
-	top: 0;
-	left: 50%;
-	transform: translate(-50%, -100%);
-	opacity: 0;
+	bottom: 100%;
+	left: 0;
 	z-index: 1;
-
-	&:focus-within,
-	&:hover {
-		opacity: 1;
-	}
 }
 </style>

@@ -38,6 +38,9 @@
                 "dueComplete": {
                     "type": "boolean"
                 },
+                "externalSource": {
+                    "type": "null"
+                },
                 "fogbugz": {
                     "type": "string"
                 },
@@ -46,6 +49,9 @@
                 },
                 "location": {
                     "type": "boolean"
+                },
+                "maliciousAttachments": {
+                    "type": "integer"
                 },
                 "subscribed": {
                     "type": "boolean"
@@ -194,5 +200,5 @@
             "type": "string"
         }
     },
-    "version": 1
+    "version": 7
 }

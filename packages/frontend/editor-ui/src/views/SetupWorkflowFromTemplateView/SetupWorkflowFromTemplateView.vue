@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeMount, onMounted, watch } from 'vue';
+import { computed, onMounted, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useSetupTemplateStore } from './setupTemplate.store';
 import N8nHeading from '@n8n/design-system/components/N8nHeading';
@@ -7,14 +7,12 @@ import N8nLink from '@n8n/design-system/components/N8nLink';
 import AppsRequiringCredsNotice from './AppsRequiringCredsNotice.vue';
 import SetupTemplateFormStep from './SetupTemplateFormStep.vue';
 import TemplatesView from '../TemplatesView.vue';
-import { TEMPLATE_CREDENTIAL_SETUP_EXPERIMENT, VIEWS } from '@/constants';
-import { useI18n } from '@/composables/useI18n';
-import { usePostHog } from '@/stores/posthog.store';
+import { VIEWS } from '@/constants';
+import { useI18n } from '@n8n/i18n';
 
 // Store
 const setupTemplateStore = useSetupTemplateStore();
 const i18n = useI18n();
-const posthogStore = usePostHog();
 
 // Router
 const route = useRoute();
@@ -79,15 +77,6 @@ const skipIfTemplateHasNoCreds = async () => {
 
 setupTemplateStore.setTemplateId(templateId.value);
 
-onBeforeMount(async () => {
-	if (!posthogStore.isFeatureEnabled(TEMPLATE_CREDENTIAL_SETUP_EXPERIMENT)) {
-		void router.replace({
-			name: VIEWS.TEMPLATE_IMPORT,
-			params: { id: templateId.value },
-		});
-	}
-});
-
 onMounted(async () => {
 	await setupTemplateStore.init();
 	await skipIfTemplateHasNoCreds();
@@ -102,7 +91,7 @@ onMounted(async () => {
 			<N8nHeading v-if="isReady" tag="h1" size="2xlarge"
 				>{{ i18n.baseText('templateSetup.title', { interpolate: { name: title } }) }}
 			</N8nHeading>
-			<n8n-loading v-else variant="h1" />
+			<N8nLoading v-else variant="h1" />
 		</template>
 
 		<template #content>
@@ -112,7 +101,7 @@ onMounted(async () => {
 						v-if="isReady"
 						:app-credentials="setupTemplateStore.appCredentials"
 					/>
-					<n8n-loading v-else variant="p" />
+					<N8nLoading v-else variant="p" />
 				</div>
 
 				<div>
@@ -138,8 +127,8 @@ onMounted(async () => {
 						/>
 					</ol>
 					<div v-else :class="$style.appCredentialsContainer">
-						<n8n-loading :class="$style.appCredential" variant="p" :rows="3" />
-						<n8n-loading :class="$style.appCredential" variant="p" :rows="3" />
+						<N8nLoading :class="$style.appCredential" variant="p" :rows="3" />
+						<N8nLoading :class="$style.appCredential" variant="p" :rows="3" />
 					</div>
 				</div>
 
@@ -148,12 +137,12 @@ onMounted(async () => {
 						i18n.baseText('templateSetup.skip')
 					}}</N8nLink>
 
-					<n8n-tooltip
+					<N8nTooltip
 						v-if="isReady"
 						:content="i18n.baseText('templateSetup.continue.button.fillRemaining')"
 						:disabled="setupTemplateStore.numFilledCredentials > 0"
 					>
-						<n8n-button
+						<N8nButton
 							size="large"
 							:label="i18n.baseText('templateSetup.continue.button')"
 							:disabled="
@@ -162,9 +151,9 @@ onMounted(async () => {
 							data-test-id="continue-button"
 							@click="setupTemplateStore.createWorkflow({ router })"
 						/>
-					</n8n-tooltip>
+					</N8nTooltip>
 					<div v-else>
-						<n8n-loading variant="button" />
+						<N8nLoading variant="button" />
 					</div>
 				</div>
 			</div>

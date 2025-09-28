@@ -1,15 +1,15 @@
 <script setup lang="ts">
 import Canvas from '@/components/canvas/Canvas.vue';
-import type { WatchStopHandle } from 'vue';
-import { computed, ref, toRef, useCssModule, watch } from 'vue';
+import { computed, ref, toRef, useCssModule, useTemplateRef } from 'vue';
 import type { Workflow } from 'n8n-workflow';
 import type { IWorkflowDb } from '@/Interface';
 import { useCanvasMapping } from '@/composables/useCanvasMapping';
 import type { EventBus } from '@n8n/utils/event-bus';
 import { createEventBus } from '@n8n/utils/event-bus';
-import type { CanvasConnection, CanvasEventBusEvents, CanvasNode } from '@/types';
+import type { CanvasEventBusEvents } from '@/types';
 import { useVueFlow } from '@vue-flow/core';
-import { debounce } from 'lodash-es';
+import { throttledRef } from '@vueuse/core';
+import { type ContextMenuAction } from '@/composables/useContextMenuItems';
 
 defineOptions({
 	inheritAttrs: false,
@@ -25,18 +25,21 @@ const props = withDefaults(
 		eventBus?: EventBus<CanvasEventBusEvents>;
 		readOnly?: boolean;
 		executing?: boolean;
+		suppressInteraction?: boolean;
 	}>(),
 	{
 		id: 'canvas',
 		eventBus: () => createEventBus<CanvasEventBusEvents>(),
 		fallbackNodes: () => [],
 		showFallbackNodes: true,
+		suppressInteraction: false,
 	},
 );
 
+const canvasRef = useTemplateRef('canvas');
 const $style = useCssModule();
 
-const { onNodesInitialized } = useVueFlow({ id: props.id });
+const { onNodesInitialized } = useVueFlow(props.id);
 
 const workflow = toRef(props, 'workflow');
 const workflowObject = toRef(props, 'workflowObject');
@@ -62,68 +65,28 @@ onNodesInitialized(() => {
 	}
 });
 
-// Debounced versions of nodes and connections and watchers
-const nodesDebounced = ref<CanvasNode[]>([]);
-const connectionsDebounced = ref<CanvasConnection[]>([]);
-const debounceNodesWatcher = ref<WatchStopHandle>();
-const debounceConnectionsWatcher = ref<WatchStopHandle>();
+const mappedNodesThrottled = throttledRef(mappedNodes, 200);
+const mappedConnectionsThrottled = throttledRef(mappedConnections, 200);
 
-// Update debounce watchers when execution state changes
-watch(() => props.executing, setupDebouncedWatchers, { immediate: true });
-
-/**
- * Sets up debounced watchers for nodes and connections
- * Uses different debounce times based on execution state:
- * - During execution: Debounce updates to reduce performance impact for large number of nodes/items
- * - Otherwise: Update immediately
- */
-function setupDebouncedWatchers() {
-	// Clear existing watchers if they exist
-	debounceNodesWatcher.value?.();
-	debounceConnectionsWatcher.value?.();
-
-	// Configure debounce parameters based on execution state
-	const debounceTime = props.executing ? 200 : 0;
-	const maxWait = props.executing ? 50 : 0;
-
-	// Set up debounced watcher for nodes
-	debounceNodesWatcher.value = watch(
-		mappedNodes,
-		debounce(
-			(value) => {
-				nodesDebounced.value = value;
-			},
-			debounceTime,
-			{ maxWait },
-		),
-		{ immediate: true, deep: true },
-	);
-
-	// Set up debounced watcher for connections
-	debounceConnectionsWatcher.value = watch(
-		mappedConnections,
-		debounce(
-			(value) => {
-				connectionsDebounced.value = value;
-			},
-			debounceTime,
-			{ maxWait },
-		),
-		{ immediate: true, deep: true },
-	);
-}
+defineExpose({
+	executeContextMenuAction: (action: ContextMenuAction, nodeIds: string[]) =>
+		canvasRef.value?.executeContextMenuAction(action, nodeIds),
+});
 </script>
 
 <template>
 	<div :class="$style.wrapper" data-test-id="canvas-wrapper">
-		<div :class="$style.canvas">
+		<div id="canvas" :class="$style.canvas">
 			<Canvas
 				v-if="workflow"
 				:id="id"
-				:nodes="nodesDebounced"
-				:connections="connectionsDebounced"
+				ref="canvas"
+				:nodes="executing ? mappedNodesThrottled : mappedNodes"
+				:connections="executing ? mappedConnectionsThrottled : mappedConnections"
 				:event-bus="eventBus"
 				:read-only="readOnly"
+				:executing="executing"
+				:suppress-interaction="suppressInteraction"
 				v-bind="$attrs"
 			/>
 		</div>
@@ -133,7 +96,7 @@ function setupDebouncedWatchers() {
 
 <style lang="scss" module>
 .wrapper {
-	display: block;
+	display: flex;
 	position: relative;
 	width: 100%;
 	height: 100%;
@@ -145,5 +108,7 @@ function setupDebouncedWatchers() {
 	height: 100%;
 	position: relative;
 	display: block;
+	align-items: stretch;
+	justify-content: stretch;
 }
 </style>

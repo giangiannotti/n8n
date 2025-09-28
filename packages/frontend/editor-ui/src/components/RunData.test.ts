@@ -1,8 +1,10 @@
+import { reactive } from 'vue';
 import { createTestWorkflowObject, defaultNodeDescriptions } from '@/__tests__/mocks';
 import { createComponentRenderer } from '@/__tests__/render';
-import { SETTINGS_STORE_DEFAULT_STATE } from '@/__tests__/utils';
+import { type MockedStore, mockedStore, SETTINGS_STORE_DEFAULT_STATE } from '@/__tests__/utils';
 import RunData from '@/components/RunData.vue';
-import { SET_NODE_TYPE, STORES } from '@/constants';
+import { STORES } from '@n8n/stores';
+import { SET_NODE_TYPE } from '@/constants';
 import type { INodeUi, IRunDataDisplayMode, NodePanelType } from '@/Interface';
 import { useWorkflowsStore } from '@/stores/workflows.store';
 import { createTestingPinia } from '@pinia/testing';
@@ -10,7 +12,8 @@ import userEvent from '@testing-library/user-event';
 import { waitFor } from '@testing-library/vue';
 import type { INodeExecutionData, ITaskData, ITaskMetadata } from 'n8n-workflow';
 import { setActivePinia } from 'pinia';
-import { useNodeTypesStore } from '../stores/nodeTypes.store';
+import { useNodeTypesStore } from '@/stores/nodeTypes.store';
+import { useSchemaPreviewStore } from '@/stores/schemaPreview.store';
 
 const MOCK_EXECUTION_URL = 'execution.url/123';
 
@@ -21,8 +24,12 @@ const { trackOpeningRelatedExecution, resolveRelatedExecutionUrl } = vi.hoisted(
 
 vi.mock('vue-router', () => {
 	return {
-		useRouter: () => ({}),
-		useRoute: () => ({ meta: {} }),
+		useRouter: () => ({
+			resolve: vi.fn(() => ({
+				href: '',
+			})),
+		}),
+		useRoute: () => reactive({ meta: {} }),
 		RouterLink: vi.fn(),
 	};
 });
@@ -40,6 +47,10 @@ vi.mock('@/composables/useWorkflowHelpers', async (importOriginal) => {
 });
 
 describe('RunData', () => {
+	let workflowsStore: MockedStore<typeof useWorkflowsStore>;
+	let nodeTypesStore: MockedStore<typeof useNodeTypesStore>;
+	let schemaPreviewStore: MockedStore<typeof useSchemaPreviewStore>;
+
 	beforeAll(() => {
 		resolveRelatedExecutionUrl.mockReturnValue('execution.url/123');
 	});
@@ -117,8 +128,8 @@ describe('RunData', () => {
 		expect(getByText('Json data 1')).toBeInTheDocument();
 	});
 
-	it('should render view and download buttons for PDFs', async () => {
-		const { getByTestId } = render({
+	it('should render only download buttons for PDFs', async () => {
+		const { getByTestId, queryByTestId } = render({
 			defaultRunItems: [
 				{
 					json: {},
@@ -127,6 +138,31 @@ describe('RunData', () => {
 							fileName: 'test.pdf',
 							fileType: 'pdf',
 							mimeType: 'application/pdf',
+							data: '',
+						},
+					},
+				},
+			],
+			displayMode: 'binary',
+		});
+
+		await waitFor(() => {
+			expect(queryByTestId('ndv-view-binary-data')).not.toBeInTheDocument();
+			expect(getByTestId('ndv-download-binary-data')).toBeInTheDocument();
+			expect(getByTestId('ndv-binary-data_0')).toBeInTheDocument();
+		});
+	});
+
+	it('should render view and download buttons for JPEGs', async () => {
+		const { getByTestId } = render({
+			defaultRunItems: [
+				{
+					json: {},
+					binary: {
+						data: {
+							fileName: 'test.jpg',
+							fileType: 'image',
+							mimeType: 'image/jpeg',
 							data: '',
 						},
 					},
@@ -236,7 +272,7 @@ describe('RunData', () => {
 
 	it('should render pagination with binary data on non-binary tab', async () => {
 		const { getByTestId } = render({
-			defaultRunItems: Array.from({ length: 11 }).map((_, i) => ({
+			defaultRunItems: Array.from({ length: 26 }).map((_, i) => ({
 				json: {
 					data: {
 						id: i,
@@ -359,8 +395,9 @@ describe('RunData', () => {
 		const { getByTestId, queryByTestId } = render({
 			runs: [
 				{
-					startTime: new Date().getTime(),
-					executionTime: new Date().getTime(),
+					startTime: Date.now(),
+					executionIndex: 0,
+					executionTime: 1,
 					data: {
 						main: [[{ json: {} }]],
 					},
@@ -368,8 +405,9 @@ describe('RunData', () => {
 					metadata,
 				},
 				{
-					startTime: new Date().getTime(),
-					executionTime: new Date().getTime(),
+					startTime: Date.now(),
+					executionIndex: 1,
+					executionTime: 1,
 					data: {
 						main: [[{ json: {} }]],
 					},
@@ -413,10 +451,11 @@ describe('RunData', () => {
 				{
 					hints: [],
 					startTime: 1737643696893,
+					executionIndex: 0,
 					executionTime: 2,
 					source: [
 						{
-							previousNode: 'When clicking ‘Test workflow’',
+							previousNode: 'When clicking ‘Execute workflow’',
 						},
 					],
 					executionStatus: 'error',
@@ -447,7 +486,7 @@ describe('RunData', () => {
 		const testNodes = [
 			{
 				id: '1',
-				name: 'When clicking ‘Test workflow’',
+				name: 'When clicking ‘Execute workflow’',
 				type: 'n8n-nodes-base.manualTrigger',
 				typeVersion: 1,
 				position: [80, -180],
@@ -501,7 +540,7 @@ describe('RunData', () => {
 					executionTime: 2,
 					source: [
 						{
-							previousNode: 'When clicking ‘Test workflow’',
+							previousNode: 'When clicking ‘Execute workflow’',
 						},
 					],
 					executionStatus: 'error',
@@ -538,7 +577,6 @@ describe('RunData', () => {
 					executionTime: 3,
 					// @ts-expect-error allow missing properties in test
 					source: [{ previousNode: 'Execute Workflow Trigger' }],
-					// @ts-expect-error allow missing properties in test
 					executionStatus: 'error',
 					// @ts-expect-error allow missing properties in test
 					error: {
@@ -568,6 +606,128 @@ describe('RunData', () => {
 		expect(getByTestId('ndv-items-count')).toBeInTheDocument();
 	});
 
+	describe('computed properties for branch handling', () => {
+		it('no run selector when no run data exists', () => {
+			const { container } = render({
+				displayMode: 'json',
+				runs: [],
+			});
+
+			// Component instance checks would need to be done differently in Vue 3
+			// For now, we verify the behavior through the UI
+			expect(container.querySelector('.run-selector')).not.toBeInTheDocument();
+		});
+
+		it('Show run selector when branch switch is shown (with all runs)', async () => {
+			// Create multiple runs with data in different outputs
+			const multipleRuns = [
+				{
+					startTime: Date.now(),
+					executionIndex: 0,
+					executionTime: 1,
+					data: {
+						main: [
+							[{ json: { value: 1 } }], // output 0
+							[{ json: { value: 2 } }], // output 1
+						],
+					},
+					source: [null],
+				},
+				{
+					startTime: Date.now(),
+					executionIndex: 1,
+					executionTime: 1,
+					data: {
+						main: [
+							[{ json: { value: 3 } }], // output 0
+							[], // output 1 empty
+						],
+					},
+					source: [null],
+				},
+				{
+					startTime: Date.now(),
+					executionIndex: 2,
+					executionTime: 1,
+					data: {
+						main: [
+							[], // output 0 empty
+							[{ json: { value: 4 } }], // output 1
+						],
+					},
+					source: [null],
+				},
+			];
+
+			const { getByTestId, findAllByTestId } = render({
+				displayMode: 'json',
+				runs: multipleRuns,
+			});
+
+			// When there are multiple branches and outputs, the run selector should be visible
+			const runSelector = getByTestId('run-selector');
+			expect(runSelector).toBeInTheDocument();
+
+			const runSelectorOptionsCount = await findAllByTestId('run-selection-option');
+			expect(runSelectorOptionsCount.length).toBe(3);
+		});
+
+		it('Show run selector when there is no branch selector (only runs for branch with data)', async () => {
+			// Create multiple runs with data in different outputs
+			const multipleRuns = [
+				{
+					startTime: Date.now(),
+					executionIndex: 0,
+					executionTime: 1,
+					data: {
+						main: [
+							[{ json: { value: 1 } }], // output 0
+							[{ json: { value: 2 } }], // output 1
+						],
+					},
+					source: [null],
+				},
+				{
+					startTime: Date.now(),
+					executionIndex: 1,
+					executionTime: 1,
+					data: {
+						main: [
+							[{ json: { value: 3 } }], // output 0
+							[], // output 1 empty
+						],
+					},
+					source: [null],
+				},
+				{
+					startTime: Date.now(),
+					executionIndex: 2,
+					executionTime: 1,
+					data: {
+						main: [
+							[], // output 0 empty
+							[{ json: { value: 4 } }], // output 1
+						],
+					},
+					source: [null],
+				},
+			];
+
+			const { getByTestId, findAllByTestId } = render({
+				displayMode: 'json',
+				runs: multipleRuns,
+				overrideOutputs: [1],
+			});
+
+			// Should show run selector since there are multiple runs
+			const runSelector = getByTestId('run-selector');
+			expect(runSelector).toBeInTheDocument();
+
+			const runSelectorOptionsCount = await findAllByTestId('run-selection-option');
+			expect(runSelectorOptionsCount.length).toBe(2);
+		});
+	});
+
 	// Default values for the render function
 	const nodes = [
 		{
@@ -582,24 +742,29 @@ describe('RunData', () => {
 
 	const render = ({
 		defaultRunItems,
+		workflowId,
 		workflowNodes = nodes,
-		displayMode,
+		displayMode = 'html',
 		pinnedData,
 		paneType = 'output',
 		metadata,
 		runs,
+		overrideOutputs,
 	}: {
 		defaultRunItems?: INodeExecutionData[];
+		workflowId?: string;
 		workflowNodes?: INodeUi[];
 		displayMode: IRunDataDisplayMode;
 		pinnedData?: INodeExecutionData[];
 		paneType?: NodePanelType;
 		metadata?: ITaskMetadata;
 		runs?: ITaskData[];
+		overrideOutputs?: number[];
 	}) => {
 		const defaultRun: ITaskData = {
-			startTime: new Date().getTime(),
-			executionTime: new Date().getTime(),
+			startTime: Date.now(),
+			executionIndex: 0,
+			executionTime: 1,
 			data: {
 				main: [defaultRunItems ?? [{ json: {} }]],
 			},
@@ -612,7 +777,6 @@ describe('RunData', () => {
 			initialState: {
 				[STORES.SETTINGS]: SETTINGS_STORE_DEFAULT_STATE,
 				[STORES.NDV]: {
-					outputPanelDisplayMode: displayMode,
 					activeNodeName: 'Test Node',
 				},
 				[STORES.WORKFLOWS]: {
@@ -648,25 +812,29 @@ describe('RunData', () => {
 
 		setActivePinia(pinia);
 
-		const workflowsStore = useWorkflowsStore();
-		const nodeTypesStore = useNodeTypesStore();
+		nodeTypesStore = mockedStore(useNodeTypesStore);
+		workflowsStore = mockedStore(useWorkflowsStore);
+		schemaPreviewStore = mockedStore(useSchemaPreviewStore);
 
 		nodeTypesStore.setNodeTypes(defaultNodeDescriptions);
-		vi.mocked(workflowsStore).getNodeByName.mockReturnValue(workflowNodes[0]);
+		workflowsStore.getNodeByName.mockReturnValue(workflowNodes[0]);
 
 		if (pinnedData) {
-			vi.mocked(workflowsStore).pinDataByNodeName.mockReturnValue(pinnedData);
+			workflowsStore.pinDataByNodeName.mockReturnValue(pinnedData);
 		}
+
+		schemaPreviewStore.getSchemaPreview = vi.fn().mockResolvedValue({});
 
 		return createComponentRenderer(RunData, {
 			props: {
 				node: {
 					name: 'Test Node',
 				},
-				workflow: createTestWorkflowObject({
-					// @ts-expect-error allow missing properties in test
-					workflowNodes,
+				workflowObject: createTestWorkflowObject({
+					id: workflowId,
+					nodes: workflowNodes,
 				}),
+				displayMode,
 			},
 			global: {
 				stubs: {
@@ -680,6 +848,7 @@ describe('RunData', () => {
 					name: 'Test Node',
 					type: SET_NODE_TYPE,
 					position: [0, 0],
+					parameters: {},
 				},
 				nodes: [{ name: 'Test Node', indicies: [], depth: 1 }],
 				runIndex: 0,
@@ -687,6 +856,10 @@ describe('RunData', () => {
 				isExecuting: false,
 				mappingEnabled: true,
 				distanceFromActive: 0,
+				tooMuchDataTitle: '',
+				executingMessage: '',
+				noDataInBranchMessage: '',
+				overrideOutputs,
 			},
 			pinia,
 		});

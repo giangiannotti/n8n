@@ -12,7 +12,7 @@ import {
 	type SchemaNode,
 } from '@/composables/useDataSchema';
 import { useExternalHooks } from '@/composables/useExternalHooks';
-import { useI18n } from '@/composables/useI18n';
+import { useI18n } from '@n8n/i18n';
 import { useNodeHelpers } from '@/composables/useNodeHelpers';
 import { useTelemetry } from '@/composables/useTelemetry';
 import { useNDVStore } from '@/stores/ndv.store';
@@ -35,32 +35,31 @@ import {
 } from 'vue-virtual-scroller';
 import MappingPill from './MappingPill.vue';
 
-import {
-	EnterpriseEditionFeature,
-	PLACEHOLDER_FILLED_AT_EXECUTION_TIME,
-	SCHEMA_PREVIEW_EXPERIMENT,
-} from '@/constants';
+import { EnterpriseEditionFeature, PLACEHOLDER_FILLED_AT_EXECUTION_TIME } from '@/constants';
 import useEnvironmentsStore from '@/stores/environments.ee.store';
-import { usePostHog } from '@/stores/posthog.store';
 import { useSchemaPreviewStore } from '@/stores/schemaPreview.store';
 import { useSettingsStore } from '@/stores/settings.store';
 import { isEmpty } from '@/utils/typesUtils';
 import { asyncComputed } from '@vueuse/core';
 import 'vue-virtual-scroller/dist/vue-virtual-scroller.css';
-import { pick } from 'lodash-es';
+import pick from 'lodash/pick';
 import { DateTime } from 'luxon';
+import NodeExecuteButton from './NodeExecuteButton.vue';
+import { I18nT } from 'vue-i18n';
+import { useTelemetryContext } from '@/composables/useTelemetryContext';
+import NDVEmptyState from '@/components/NDVEmptyState.vue';
 
 type Props = {
 	nodes?: IConnectedNode[];
 	node?: INodeUi | null;
 	data?: IDataObject[];
 	mappingEnabled?: boolean;
-	runIndex?: number;
-	outputIndex?: number;
-	totalRuns?: number;
 	paneType: 'input' | 'output';
 	connectionType?: NodeConnectionType;
 	search?: string;
+	compact?: boolean;
+	outputIndex?: number;
+	truncateLimit?: number;
 };
 
 const props = withDefaults(defineProps<Props>(), {
@@ -68,15 +67,16 @@ const props = withDefaults(defineProps<Props>(), {
 	distanceFromActive: 1,
 	node: null,
 	data: () => [],
-	runIndex: 0,
-	outputIndex: 0,
-	totalRuns: 1,
 	connectionType: NodeConnectionTypes.Main,
 	search: '',
 	mappingEnabled: false,
+	compact: false,
+	outputIndex: undefined,
+	truncateLimit: 600,
 });
 
 const telemetry = useTelemetry();
+const telemetryContext = useTelemetryContext();
 const i18n = useI18n();
 const ndvStore = useNDVStore();
 const nodeTypesStore = useNodeTypesStore();
@@ -84,47 +84,76 @@ const workflowsStore = useWorkflowsStore();
 const schemaPreviewStore = useSchemaPreviewStore();
 const environmentsStore = useEnvironmentsStore();
 const settingsStore = useSettingsStore();
-const posthogStore = usePostHog();
+
 const { getSchemaForExecutionData, getSchemaForJsonSchema, getSchema, filterSchema } =
 	useDataSchema();
-const { closedNodes, flattenSchema, flattenMultipleSchemas, toggleLeaf, toggleNode } =
-	useFlattenSchema();
-const { getNodeInputData } = useNodeHelpers();
+const { closedNodes, flattenSchema, flattenMultipleSchemas, toggleNode } = useFlattenSchema();
+const { getNodeInputData, getLastRunIndexWithData, hasNodeExecuted } = useNodeHelpers();
 
 const emit = defineEmits<{
 	'clear:search': [];
 }>();
 
 const scroller = ref<RecycleScrollerInstance>();
+const closedNodesBeforeSearch = ref(new Set<string>());
 
-const toggleNodeAndScrollTop = (id: string) => {
+const canDraggableDrop = computed(() => ndvStore.canDraggableDrop);
+const draggableStickyPosition = computed(() => ndvStore.draggableStickyPos);
+
+const toggleNodeExclusiveAndScrollTop = (id: string) => {
+	const isClosed = closedNodes.value.has(id);
+	if (isClosed) {
+		closedNodes.value = new Set(items.value.map((item) => item.id));
+	}
 	toggleNode(id);
 	scroller.value?.scrollToItem(0);
 };
 
 const getNodeSchema = async (fullNode: INodeUi, connectedNode: IConnectedNode) => {
 	const pinData = workflowsStore.pinDataByNodeName(connectedNode.name);
+	const hasPinnedData = pinData ? pinData.length > 0 : false;
+	const isNodeExecuted = hasPinnedData || hasNodeExecuted(connectedNode.name);
+
 	const connectedOutputIndexes = connectedNode.indicies.length > 0 ? connectedNode.indicies : [0];
-	const data =
-		pinData ??
-		connectedOutputIndexes
-			.map((outputIndex) =>
-				executionDataToJson(
-					getNodeInputData(
-						fullNode,
-						props.runIndex,
-						outputIndex,
-						props.paneType,
-						props.connectionType,
-					),
-				),
-			)
-			.flat();
+	const connectedOutputsWithData = connectedOutputIndexes
+		.map((outputIndex) => ({
+			outputIndex,
+			runIndex: getLastRunIndexWithData(fullNode.name, outputIndex, props.connectionType),
+		}))
+		.filter(({ runIndex }) => runIndex !== -1);
+
+	// For connected nodes with multiple outputs that connect to the current node,
+	// filter by outputIndex if it's specified and matches one of the connected outputs
+	// This ensures we show the correct branch when viewing multi-output nodes like SplitInBatches
+	let filteredOutputsWithData = connectedOutputsWithData;
+
+	// Only apply outputIndex filtering if:
+	// 1. outputIndex is specified
+	// 2. The node has multiple connected outputs
+	// 3. The specified outputIndex is one of the connected outputs
+	if (
+		props.outputIndex !== undefined &&
+		connectedOutputIndexes.length > 1 &&
+		connectedOutputIndexes.includes(props.outputIndex)
+	) {
+		filteredOutputsWithData = connectedOutputsWithData.filter(
+			({ outputIndex }) => outputIndex === props.outputIndex,
+		);
+	}
+
+	const nodeData = filteredOutputsWithData
+		.map(({ outputIndex, runIndex }) =>
+			getNodeInputData(fullNode, runIndex, outputIndex, props.paneType, props.connectionType),
+		)
+		.flat();
+	const hasBinary = nodeData.some((data) => !isEmpty(data.binary));
+	const data = pinData ?? executionDataToJson(nodeData);
+	const isDataEmpty = data.length === 0;
 
 	let schema = getSchemaForExecutionData(data);
 	let preview = false;
 
-	if (data.length === 0 && isSchemaPreviewEnabled.value) {
+	if (data.length === 0) {
 		const previewSchema = await getSchemaPreview(fullNode);
 		if (previewSchema.ok) {
 			schema = getSchemaForJsonSchema(previewSchema.result);
@@ -136,13 +165,13 @@ const getNodeSchema = async (fullNode: INodeUi, connectedNode: IConnectedNode) =
 		schema,
 		connectedOutputIndexes,
 		itemsCount: data.length,
+		runIndex: connectedOutputsWithData[0]?.runIndex ?? 0,
 		preview,
+		hasBinary,
+		isNodeExecuted,
+		isDataEmpty,
 	};
 };
-
-const isSchemaPreviewEnabled = computed(() =>
-	posthogStore.isVariantEnabled(SCHEMA_PREVIEW_EXPERIMENT.name, SCHEMA_PREVIEW_EXPERIMENT.variant),
-);
 
 const isVariablesEnabled = computed(
 	() => settingsStore.isEnterpriseFeatureEnabled[EnterpriseEditionFeature.Variables],
@@ -163,7 +192,7 @@ const contextSchema = computed(() => {
 		$workflow: pick(workflowsStore.workflow, ['id', 'name', 'active']),
 	};
 
-	return getSchema(schemaSource);
+	return filterSchema(getSchema(schemaSource), props.search);
 });
 
 const contextItems = computed(() => {
@@ -177,10 +206,19 @@ const contextItems = computed(() => {
 
 	if (closedNodes.value.has(header.id)) return [header];
 
-	const fields: Renders[] = flattenSchema({
-		schema: contextSchema.value,
+	const schema = contextSchema.value;
+
+	if (!schema) {
+		return [];
+	}
+
+	const flatSchema = flattenSchema({
+		schema,
 		depth: 1,
-	}).flatMap((renderItem) => {
+		isDataEmpty: false,
+		truncateLimit: props.truncateLimit,
+	});
+	const fields: Renders[] = flatSchema.flatMap((renderItem) => {
 		const isVars =
 			renderItem.type === 'item' && renderItem.depth === 1 && renderItem.title === '$vars';
 
@@ -214,7 +252,7 @@ const contextItems = computed(() => {
 
 const nodeSchema = asyncComputed(async () => {
 	const search = props.search;
-	if (props.data.length === 0 && isSchemaPreviewEnabled.value) {
+	if (props.data.length === 0) {
 		const previewSchema = await getSchemaPreview(props.node);
 		if (previewSchema.ok) {
 			return filterSchema(getSchemaForJsonSchema(previewSchema.result), search);
@@ -251,10 +289,16 @@ const nodesSchemas = asyncComputed<SchemaNode[]>(async () => {
 		const nodeType = nodeTypesStore.getNodeType(fullNode.type, fullNode.typeVersion);
 		if (!nodeType) continue;
 
-		const { schema, connectedOutputIndexes, itemsCount, preview } = await getNodeSchema(
-			fullNode,
-			node,
-		);
+		const {
+			schema,
+			connectedOutputIndexes,
+			itemsCount,
+			preview,
+			hasBinary,
+			isNodeExecuted,
+			isDataEmpty,
+			runIndex,
+		} = await getNodeSchema(fullNode, node);
 
 		const filteredSchema = filterSchema(schema, search);
 
@@ -268,6 +312,10 @@ const nodesSchemas = asyncComputed<SchemaNode[]>(async () => {
 			nodeType,
 			schema: filteredSchema,
 			preview,
+			hasBinary,
+			isNodeExecuted,
+			isDataEmpty,
+			runIndex,
 		});
 	}
 
@@ -293,11 +341,19 @@ const nodeAdditionalInfo = (node: INodeUi) => {
 };
 
 const flattenedNodes = computed(() =>
-	flattenMultipleSchemas(nodesSchemas.value, nodeAdditionalInfo),
+	flattenMultipleSchemas(nodesSchemas.value, nodeAdditionalInfo, props.truncateLimit),
 );
 
 const flattenNodeSchema = computed(() =>
-	nodeSchema.value ? flattenSchema({ schema: nodeSchema.value, depth: 0, level: -1 }) : [],
+	nodeSchema.value
+		? flattenSchema({
+				schema: nodeSchema.value,
+				depth: 0,
+				level: -1,
+				isDataEmpty: props.data.length === 0,
+				truncateLimit: props.truncateLimit,
+			})
+		: [],
 );
 
 /**
@@ -314,77 +370,91 @@ const items = computed(() => {
 });
 
 const noSearchResults = computed(() => {
-	return Boolean(props.search.trim()) && !Boolean(items.value.length);
+	return Boolean(props.search.trim()) && !items.value.length;
 });
 
 watch(
-	() => props.search,
-	(newSearch) => {
-		if (!newSearch) return;
-		closedNodes.value.clear();
+	() => Boolean(props.search),
+	(hasSearch) => {
+		if (hasSearch) {
+			closedNodesBeforeSearch.value = new Set(closedNodes.value);
+			closedNodes.value.clear();
+		} else if (closedNodes.value.size === 0) {
+			closedNodes.value = closedNodesBeforeSearch.value;
+		}
 	},
 );
 
-// Variables & context items should be collapsed by default
-watch(
-	contextItems,
-	(currentContextItems) => {
-		currentContextItems
+// Collapse all nodes except the first
+const unwatchItems = watch(items, (newItems) => {
+	if (newItems.length < 2) return;
+	closedNodes.value = new Set(
+		newItems
 			.filter((item) => item.type === 'header')
-			.forEach((item) => {
-				closedNodes.value.add(item.id);
-			});
-	},
-	{ once: true, immediate: true },
-);
+			.slice(1)
+			.map((item) => item.id),
+	);
+	unwatchItems();
+});
 
-const onDragStart = () => {
+const onDragStart = (el: HTMLElement, data?: string) => {
+	ndvStore.draggableStartDragging({
+		type: 'mapping',
+		data: data ?? '',
+		dimensions: el?.getBoundingClientRect() ?? null,
+	});
 	ndvStore.resetMappingTelemetry();
 };
 
 const onDragEnd = (el: HTMLElement) => {
+	ndvStore.draggableStopDragging();
 	setTimeout(() => {
 		const mappingTelemetry = ndvStore.mappingTelemetry;
 		const parentNode = nodesSchemas.value.find(({ node }) => node.name === el.dataset.nodeName);
 
 		const isPreview = parentNode?.preview ?? false;
 		const hasCredential = !isEmpty(parentNode?.node.credentials);
+		const runIndex = Number(el.dataset.runIndex);
 
 		const telemetryPayload = {
 			src_node_type: el.dataset.nodeType,
 			src_field_name: el.dataset.name ?? '',
 			src_nodes_back: el.dataset.depth,
-			src_run_index: props.runIndex,
-			src_runs_total: props.totalRuns,
+			src_run_index: runIndex,
+			src_runs_total: runIndex,
 			src_field_nest_level: el.dataset.level ?? 0,
 			src_view: isPreview ? 'schema_preview' : 'schema',
 			src_has_credential: hasCredential,
 			src_element: el,
 			success: false,
+			view_shown: telemetryContext.view_shown,
 			...mappingTelemetry,
 		};
 
 		void useExternalHooks().run('runDataJson.onDragEnd', telemetryPayload);
 
-		telemetry.track('User dragged data for mapping', telemetryPayload, { withPostHog: true });
+		telemetry.track('User dragged data for mapping', telemetryPayload);
 	}, 250); // ensure dest data gets set if drop
 };
 </script>
 
 <template>
-	<div class="run-data-schema full-height">
-		<div v-if="noSearchResults" class="no-results">
-			<N8nText tag="h3" size="large">{{ i18n.baseText('ndv.search.noNodeMatch.title') }}</N8nText>
-			<N8nText>
-				<i18n-t keypath="ndv.search.noMatchSchema.description" tag="span">
-					<template #link>
-						<a href="#" @click="emit('clear:search')">
-							{{ i18n.baseText('ndv.search.noMatchSchema.description.link') }}
-						</a>
-					</template>
-				</i18n-t>
-			</N8nText>
-		</div>
+	<div
+		:class="[
+			'run-data-schema',
+			'full-height',
+			{ compact: props.compact, 'no-search-results': noSearchResults },
+		]"
+	>
+		<NDVEmptyState v-if="noSearchResults" :title="i18n.baseText('ndv.search.noNodeMatch.title')">
+			<I18nT keypath="ndv.search.noMatchSchema.description" tag="span" scope="global">
+				<template #link>
+					<a href="#" @click.prevent="emit('clear:search')">
+						{{ i18n.baseText('ndv.search.noMatchSchema.description.link') }}
+					</a>
+				</template>
+			</I18nT>
+		</NDVEmptyState>
 
 		<Draggable
 			v-if="items.length"
@@ -392,6 +462,8 @@ const onDragEnd = (el: HTMLElement) => {
 			type="mapping"
 			target-data-key="mappable"
 			:disabled="!mappingEnabled"
+			:can-drop="canDraggableDrop"
+			:sticky-position="draggableStickyPosition"
 			@dragstart="onDragStart"
 			@dragend="onDragEnd"
 		>
@@ -415,8 +487,8 @@ const onDragEnd = (el: HTMLElement) => {
 							v-if="item.type === 'header'"
 							v-bind="item"
 							:collapsed="closedNodes.has(item.id)"
-							@click:toggle="toggleLeaf(item.id)"
-							@click="toggleNodeAndScrollTop(item.id)"
+							@click:toggle="toggleNode(item.id)"
+							@click="toggleNodeExclusiveAndScrollTop(item.id)"
 						/>
 						<VirtualSchemaItem
 							v-else-if="item.type === 'item'"
@@ -425,26 +497,65 @@ const onDragEnd = (el: HTMLElement) => {
 							:draggable="mappingEnabled"
 							:collapsed="closedNodes.has(item.id)"
 							:highlight="ndvStore.highlightDraggables"
-							@click="toggleLeaf(item.id)"
+							@click="toggleNode(item.id)"
 						>
 						</VirtualSchemaItem>
 
 						<N8nTooltip v-else-if="item.type === 'icon'" :content="item.tooltip" placement="top">
-							<N8nIcon :size="14" :icon="item.icon" class="icon" />
+							<N8nIcon size="small" :icon="item.icon" class="icon" />
 						</N8nTooltip>
 
 						<div
 							v-else-if="item.type === 'notice'"
 							v-n8n-html="item.message"
 							class="notice"
-							:style="{ marginLeft: `calc(var(--spacing-l) + var(--spacing-l) * ${item.level})` }"
+							:style="{ '--schema-level': item.level }"
 						/>
+						<div
+							v-else-if="item.type === 'empty'"
+							class="empty-schema"
+							:style="{ '--schema-level': item.level }"
+						>
+							<N8nText tag="div" size="small">
+								<I18nT
+									v-if="item.key === 'executeSchema'"
+									tag="span"
+									keypath="dataMapping.schemaView.executeSchema"
+									scope="global"
+								>
+									<template #link>
+										<NodeExecuteButton
+											v-if="ndvStore.activeNodeName"
+											:node-name="ndvStore.activeNodeName"
+											:label="i18n.baseText('ndv.input.noOutputData.executePrevious')"
+											text
+											telemetry-source="inputs"
+											hide-icon
+											size="small"
+											:class="$style.executeButton"
+										/>
+									</template>
+								</I18nT>
+								<I18nT
+									v-else
+									tag="span"
+									:keypath="`dataMapping.schemaView.${item.key}`"
+									scope="global"
+								/>
+							</N8nText>
+						</div>
 					</DynamicScrollerItem>
 				</template>
 			</DynamicScroller>
 		</Draggable>
 	</div>
 </template>
+
+<style lang="css" module>
+.executeButton {
+	padding: 0;
+}
+</style>
 
 <style lang="css" scoped>
 .full-height {
@@ -453,29 +564,28 @@ const onDragEnd = (el: HTMLElement) => {
 
 .run-data-schema {
 	padding: 0;
+
+	&.no-search-results {
+		display: flex;
+		justify-content: center;
+		padding: var(--spacing-l) 0;
+	}
 }
 
 .scroller {
-	padding: 0 var(--spacing-s);
+	padding: 0 var(--ndv-spacing);
 	padding-bottom: var(--spacing-2xl);
-}
 
-.no-results {
-	display: flex;
-	flex-direction: column;
-	align-items: center;
-	justify-content: center;
-	text-align: center;
-	height: 100%;
-	gap: var(--spacing-2xs);
-	padding: var(--spacing-s) var(--spacing-s) var(--spacing-xl) var(--spacing-s);
+	.compact & {
+		padding: 0 var(--spacing-2xs);
+	}
 }
 
 .icon {
 	display: inline-flex;
 	margin-left: var(--spacing-xl);
 	color: var(--color-text-light);
-	margin-bottom: var(--spacing-s);
+	margin-bottom: var(--ndv-spacing);
 }
 
 .notice {
@@ -483,5 +593,11 @@ const onDragEnd = (el: HTMLElement) => {
 	color: var(--color-text-base);
 	font-size: var(--font-size-2xs);
 	line-height: var(--font-line-height-loose);
+	margin-left: calc(var(--spacing-l) * var(--schema-level));
+}
+
+.empty-schema {
+	padding-bottom: var(--spacing-xs);
+	margin-left: calc((var(--spacing-xl) * var(--schema-level)));
 }
 </style>

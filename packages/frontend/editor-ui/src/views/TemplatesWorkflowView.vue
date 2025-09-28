@@ -1,19 +1,17 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue';
 import { useTemplatesStore } from '@/stores/templates.store';
-import { usePostHog } from '@/stores/posthog.store';
 import { useTemplateWorkflow } from '@/utils/templates/templateActions';
 import { useExternalHooks } from '@/composables/useExternalHooks';
 import { useNodeTypesStore } from '@/stores/nodeTypes.store';
 import { useRoute, useRouter } from 'vue-router';
 import { useTelemetry } from '@/composables/useTelemetry';
 import { useDocumentTitle } from '@/composables/useDocumentTitle';
-import { useI18n } from '@/composables/useI18n';
+import { useI18n } from '@n8n/i18n';
 import TemplatesView from './TemplatesView.vue';
 
 const externalHooks = useExternalHooks();
 const templatesStore = useTemplatesStore();
-const posthogStore = usePostHog();
 const nodeTypesStore = useNodeTypesStore();
 
 const route = useRoute();
@@ -34,7 +32,6 @@ const template = computed(() => templatesStore.getFullTemplateById(templateId.va
 
 const openTemplateSetup = async (id: string, e: PointerEvent) => {
 	await useTemplateWorkflow({
-		posthogStore,
 		router,
 		templateId: id,
 		inNewBrowserTab: e.metaKey || e.ctrlKey,
@@ -94,27 +91,27 @@ onMounted(async () => {
 		<template #header>
 			<div v-if="!notFoundError" :class="$style.wrapper">
 				<div :class="$style.title">
-					<n8n-heading v-if="template && template.name" tag="h1" size="2xlarge">{{
+					<N8nHeading v-if="template && template.name" tag="h1" size="2xlarge">{{
 						template.name
-					}}</n8n-heading>
-					<n8n-text v-if="template && template.name" color="text-base" size="small">
+					}}</N8nHeading>
+					<N8nText v-if="template && template.name" color="text-base" size="small">
 						{{ i18n.baseText('generic.workflow') }}
-					</n8n-text>
-					<n8n-loading :loading="!template || !template.name" :rows="2" variant="h1" />
+					</N8nText>
+					<N8nLoading :loading="!template || !template.name" :rows="2" variant="h1" />
 				</div>
 				<div :class="$style.button">
-					<n8n-button
+					<N8nButton
 						v-if="template"
 						data-test-id="use-template-button"
 						:label="i18n.baseText('template.buttons.useThisWorkflowButton')"
 						size="large"
 						@click="openTemplateSetup(templateId, $event)"
 					/>
-					<n8n-loading :loading="!template" :rows="1" variant="button" />
+					<N8nLoading :loading="!template" :rows="1" variant="button" />
 				</div>
 			</div>
 			<div v-else :class="$style.notFound">
-				<n8n-text color="text-base">{{ i18n.baseText('templates.workflowsNotFound') }}</n8n-text>
+				<N8nText color="text-base">{{ i18n.baseText('templates.workflowsNotFound') }}</N8nText>
 			</div>
 		</template>
 		<template v-if="!notFoundError" #content>
@@ -128,7 +125,7 @@ onMounted(async () => {
 			</div>
 			<div :class="$style.content">
 				<div :class="$style.markdown" data-test-id="template-description">
-					<n8n-markdown
+					<N8nMarkdown
 						:content="template?.description"
 						:images="template?.image"
 						:loading="loading"

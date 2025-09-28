@@ -1,5 +1,5 @@
 <script lang="ts" setup>
-import { useI18n } from '@/composables/useI18n';
+import { useI18n } from '@n8n/i18n';
 import { useNDVStore } from '@/stores/ndv.store';
 import { useNodeTypesStore } from '@/stores/nodeTypes.store';
 import { useWorkflowsStore } from '@/stores/workflows.store';
@@ -35,19 +35,20 @@ const selectedInputNodeType = computed(() => {
 	return nodeTypesStore.getNodeType(node.type, node.typeVersion);
 });
 
-const inputNodes = computed(() =>
-	props.nodes
-		.map((node) => {
-			const fullNode = workflowsStore.getNodeByName(node.name);
-			if (!fullNode) return null;
+const inputNodes = computed(
+	() =>
+		props.nodes
+			?.map((node) => {
+				const fullNode = workflowsStore.getNodeByName(node.name);
+				if (!fullNode) return null;
 
-			return {
-				node: fullNode,
-				type: nodeTypesStore.getNodeType(fullNode.type, fullNode.typeVersion),
-				depth: node.depth,
-			};
-		})
-		.filter(isPresent),
+				return {
+					node: fullNode,
+					type: nodeTypesStore.getNodeType(fullNode.type, fullNode.typeVersion),
+					depth: node.depth,
+				};
+			})
+			.filter(isPresent) ?? [],
 );
 
 const activeNode = computed(() => ndvStore.activeNode);
@@ -83,7 +84,7 @@ function getMultipleNodesText(nodeName: string): string {
 		return '';
 
 	const activeNodeConnections =
-		props.workflow.connectionsByDestinationNode[activeNode.value.name].main || [];
+		workflowsStore.connectionsByDestinationNode[activeNode.value.name].main || [];
 	// Collect indexes of connected nodes
 	const connectedInputIndexes = activeNodeConnections.reduce((acc: number[], node, index) => {
 		if (node?.[0] && node[0].node === nodeName) return [...acc, index];
@@ -116,7 +117,7 @@ function onInputNodeChange(value: string) {
 </script>
 
 <template>
-	<n8n-select
+	<N8nSelect
 		:model-value="modelValue"
 		:no-data-text="i18n.baseText('ndv.input.noNodesFound')"
 		:placeholder="i18n.baseText('ndv.input.parentNodes')"
@@ -136,7 +137,7 @@ function onInputNodeChange(value: string) {
 			/>
 		</template>
 
-		<n8n-option
+		<N8nOption
 			v-for="{ node, type, depth } of inputNodes"
 			:key="node.name"
 			:value="node.name"
@@ -159,8 +160,8 @@ function onInputNodeChange(value: string) {
 			<span :class="$style.subtitle">{{
 				connectedTo(node.name) ? connectedTo(node.name) : subtitle(node.name, depth)
 			}}</span>
-		</n8n-option>
-	</n8n-select>
+		</N8nOption>
+	</N8nSelect>
 </template>
 
 <style lang="scss" module>

@@ -11,20 +11,18 @@ import type {
 import type { IUpdateInformation } from '@/Interface';
 import AuthTypeSelector from '@/components/CredentialEdit/AuthTypeSelector.vue';
 import EnterpriseEdition from '@/components/EnterpriseEdition.ee.vue';
-import { useI18n } from '@/composables/useI18n';
+import { useI18n, addCredentialTranslation } from '@n8n/i18n';
 import { useTelemetry } from '@/composables/useTelemetry';
 import {
 	BUILTIN_CREDENTIALS_DOCS_URL,
-	CREDENTIAL_DOCS_EXPERIMENT,
 	DOCS_DOMAIN,
 	EnterpriseEditionFeature,
 	NEW_ASSISTANT_SESSION_MODAL,
 } from '@/constants';
-import type { PermissionsRecord } from '@/permissions';
-import { addCredentialTranslation } from '@/plugins/i18n';
+import type { PermissionsRecord } from '@n8n/permissions';
 import { useCredentialsStore } from '@/stores/credentials.store';
 import { useNDVStore } from '@/stores/ndv.store';
-import { useRootStore } from '@/stores/root.store';
+import { useRootStore } from '@n8n/stores/useRootStore';
 import { useUIStore } from '@/stores/ui.store';
 import { useWorkflowsStore } from '@/stores/workflows.store';
 import Banner from '../Banner.vue';
@@ -32,11 +30,9 @@ import CopyInput from '../CopyInput.vue';
 import CredentialInputs from './CredentialInputs.vue';
 import GoogleAuthButton from './GoogleAuthButton.vue';
 import OauthButton from './OauthButton.vue';
-import CredentialDocs from './CredentialDocs.vue';
-import { CREDENTIAL_MARKDOWN_DOCS } from './docs';
-import { usePostHog } from '@/stores/posthog.store';
 import { useAssistantStore } from '@/stores/assistant.store';
 import InlineAskAssistantButton from '@n8n/design-system/components/InlineAskAssistantButton/InlineAskAssistantButton.vue';
+import FreeAiCreditsCallout from '@/components/FreeAiCreditsCallout.vue';
 
 type Props = {
 	mode: string;
@@ -95,6 +91,8 @@ onBeforeMount(async () => {
 	const credTranslation = await credentialsStore.getCredentialTranslation(
 		props.credentialType.name,
 	);
+
+	if (!credTranslation) return;
 
 	addCredentialTranslation(
 		{ [props.credentialType.name]: credTranslation },
@@ -186,13 +184,6 @@ const assistantAlreadyAsked = computed<boolean>(() => {
 	return assistantStore.isCredTypeActive(props.credentialType);
 });
 
-const docs = computed(() => CREDENTIAL_MARKDOWN_DOCS[props.credentialType.name]);
-const showCredentialDocs = computed(
-	() =>
-		usePostHog().getVariant(CREDENTIAL_DOCS_EXPERIMENT.name) ===
-			CREDENTIAL_DOCS_EXPERIMENT.variant && docs.value,
-);
-
 function onDataChange(event: IUpdateInformation): void {
 	emit('update', event);
 }
@@ -236,11 +227,12 @@ watch(showOAuthSuccessBanner, (newValue, oldValue) => {
 </script>
 
 <template>
-	<n8n-callout v-if="isManaged" theme="warning" icon="exclamation-triangle">
+	<N8nCallout v-if="isManaged" theme="warning" icon="triangle-alert">
 		{{ i18n.baseText('freeAi.credits.credentials.edit') }}
-	</n8n-callout>
+	</N8nCallout>
 	<div v-else>
 		<div :class="$style.config" data-test-id="node-credentials-config-container">
+			<FreeAiCreditsCallout :credential-type-name="credentialType?.name" />
 			<Banner
 				v-show="showValidationWarning"
 				theme="danger"
@@ -304,17 +296,14 @@ watch(showOAuthSuccessBanner, (newValue, oldValue) => {
 			/>
 
 			<template v-if="credentialPermissions.update">
-				<n8n-notice
-					v-if="documentationUrl && credentialProperties.length && !showCredentialDocs"
-					theme="warning"
-				>
+				<N8nNotice v-if="documentationUrl && credentialProperties.length" theme="warning">
 					{{ i18n.baseText('credentialEdit.credentialConfig.needHelpFillingOutTheseFields') }}
 					<span class="ml-4xs">
-						<n8n-link :to="documentationUrl" size="small" bold @click="onDocumentationUrlClick">
+						<N8nLink :to="documentationUrl" size="small" bold @click="onDocumentationUrlClick">
 							{{ i18n.baseText('credentialEdit.credentialConfig.openDocs') }}
-						</n8n-link>
+						</N8nLink>
 					</span>
-				</n8n-notice>
+				</N8nNotice>
 
 				<AuthTypeSelector
 					v-if="showAuthTypeSelector && isNewCredential"
@@ -349,13 +338,13 @@ watch(showOAuthSuccessBanner, (newValue, oldValue) => {
 			</template>
 			<EnterpriseEdition v-else :features="[EnterpriseEditionFeature.Sharing]">
 				<div>
-					<n8n-info-tip :bold="false">
+					<N8nInfoTip :bold="false">
 						{{
 							i18n.baseText('credentialEdit.credentialEdit.info.sharee', {
 								interpolate: { credentialOwnerName },
 							})
 						}}
-					</n8n-info-tip>
+					</N8nInfoTip>
 				</div>
 			</EnterpriseEdition>
 
@@ -380,29 +369,21 @@ watch(showOAuthSuccessBanner, (newValue, oldValue) => {
 				@click="$emit('oauth')"
 			/>
 
-			<n8n-text v-if="isMissingCredentials" color="text-base" size="medium">
+			<N8nText v-if="isMissingCredentials" color="text-base" size="medium">
 				{{ i18n.baseText('credentialEdit.credentialConfig.missingCredentialType') }}
-			</n8n-text>
+			</N8nText>
 
 			<EnterpriseEdition :features="[EnterpriseEditionFeature.ExternalSecrets]">
 				<template #fallback>
-					<n8n-info-tip class="mt-s">
+					<N8nInfoTip class="mt-s">
 						{{ i18n.baseText('credentialEdit.credentialConfig.externalSecrets') }}
-						<n8n-link bold :to="i18n.baseText('settings.externalSecrets.docs')" size="small">
+						<N8nLink bold :to="i18n.baseText('settings.externalSecrets.docs')" size="small">
 							{{ i18n.baseText('credentialEdit.credentialConfig.externalSecrets.moreInfo') }}
-						</n8n-link>
-					</n8n-info-tip>
+						</N8nLink>
+					</N8nInfoTip>
 				</template>
 			</EnterpriseEdition>
 		</div>
-		<CredentialDocs
-			v-if="showCredentialDocs"
-			:credential-type="credentialType"
-			:documentation-url="documentationUrl"
-			:docs="docs"
-			:class="$style.docs"
-		>
-		</CredentialDocs>
 	</div>
 </template>
 
@@ -414,18 +395,6 @@ watch(showOAuthSuccessBanner, (newValue, oldValue) => {
 	> * {
 		margin-bottom: var(--spacing-l);
 	}
-
-	&:has(+ .docs) {
-		padding-right: 320px;
-	}
-}
-
-.docs {
-	position: absolute;
-	right: 0;
-	bottom: 0;
-	top: 0;
-	max-width: 320px;
 }
 
 .googleReconnectLabel {

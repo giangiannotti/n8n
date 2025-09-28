@@ -62,25 +62,20 @@ describe('Send and Wait utils tests', () => {
 				return params[parameterName];
 			});
 
-			mockExecuteFunctions.evaluateExpression.mockImplementation((expression: string) => {
-				const expressions: { [key: string]: string } = {
-					'{{ $execution?.resumeUrl }}': 'http://localhost',
-					'{{ $nodeId }}': 'testNodeId',
-				};
-				return expressions[expression];
-			});
-
+			mockExecuteFunctions.getSignedResumeUrl.mockReturnValue(
+				'http://localhost/waiting-webhook/nodeID?approved=true&signature=abc',
+			);
 			const config = getSendAndWaitConfig(mockExecuteFunctions);
 
 			expect(config).toEqual({
+				appendAttribution: undefined,
 				title: 'Test subject',
 				message: 'Test message',
-				url: 'http://localhost/testNodeId',
 				options: [
 					{
 						label: 'Approve',
-						value: 'true',
 						style: 'primary',
+						url: 'http://localhost/waiting-webhook/nodeID?approved=true&signature=abc',
 					},
 				],
 			});
@@ -102,13 +97,12 @@ describe('Send and Wait utils tests', () => {
 				return params[parameterName];
 			});
 
-			mockExecuteFunctions.evaluateExpression.mockImplementation((expression: string) => {
-				const expressions: { [key: string]: string } = {
-					'{{ $execution?.resumeUrl }}': 'http://localhost',
-					'{{ $nodeId }}': 'testNodeId',
-				};
-				return expressions[expression];
-			});
+			mockExecuteFunctions.getSignedResumeUrl.mockReturnValueOnce(
+				'http://localhost/waiting-webhook/nodeID?approved=true&signature=abc',
+			);
+			mockExecuteFunctions.getSignedResumeUrl.mockReturnValueOnce(
+				'http://localhost/waiting-webhook/nodeID?approved=false&signature=abc',
+			);
 
 			const config = getSendAndWaitConfig(mockExecuteFunctions);
 
@@ -117,13 +111,13 @@ describe('Send and Wait utils tests', () => {
 				expect.arrayContaining([
 					{
 						label: 'Reject',
-						value: 'false',
 						style: 'secondary',
+						url: 'http://localhost/waiting-webhook/nodeID?approved=false&signature=abc',
 					},
 					{
 						label: 'Approve',
-						value: 'true',
 						style: 'primary',
+						url: 'http://localhost/waiting-webhook/nodeID?approved=true&signature=abc',
 					},
 				]),
 			);
@@ -146,13 +140,7 @@ describe('Send and Wait utils tests', () => {
 				return params[parameterName];
 			});
 
-			mockExecuteFunctions.evaluateExpression.mockImplementation((expression: string) => {
-				const expressions: { [key: string]: string } = {
-					'{{ $execution?.resumeUrl }}': 'http://localhost',
-					'{{ $nodeId }}': 'testNodeId',
-				};
-				return expressions[expression];
-			});
+			mockExecuteFunctions.getSignedResumeUrl.mockReturnValue('http://localhost/testNodeId');
 		});
 
 		it('should create a valid email object', () => {
@@ -238,7 +226,6 @@ describe('Send and Wait utils tests', () => {
 
 			expect(mockRender).toHaveBeenCalledWith('form-trigger', {
 				testRun: false,
-				validForm: true,
 				formTitle: '',
 				formDescription: 'Test message',
 				formDescriptionMetadata: 'Test message',
@@ -304,6 +291,7 @@ describe('Send and Wait utils tests', () => {
 						responseFormTitle: 'Test title',
 						responseFormDescription: 'Test description',
 						responseFormButtonLabel: 'Test button',
+						responseFormCustomCss: 'body { background-color: red; }',
 					},
 				};
 				return params[parameterName];
@@ -317,7 +305,6 @@ describe('Send and Wait utils tests', () => {
 
 			expect(mockRender).toHaveBeenCalledWith('form-trigger', {
 				testRun: false,
-				validForm: true,
 				formTitle: 'Test title',
 				formDescription: 'Test description',
 				formDescriptionMetadata: 'Test description',
@@ -336,6 +323,7 @@ describe('Send and Wait utils tests', () => {
 				],
 				appendAttribution: true,
 				buttonLabel: 'Test button',
+				dangerousCustomCss: 'body { background-color: red; }',
 			});
 		});
 
@@ -343,6 +331,7 @@ describe('Send and Wait utils tests', () => {
 			mockWebhookFunctions.getRequestObject.mockReturnValue({
 				method: 'POST',
 			} as any);
+			mockWebhookFunctions.getNode.mockReturnValue({} as any);
 
 			mockWebhookFunctions.getNodeParameter.mockImplementation((parameterName: string) => {
 				const params: { [key: string]: any } = {

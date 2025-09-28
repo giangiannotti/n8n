@@ -7,6 +7,17 @@
         "@odata.etag": {
             "type": "string"
         },
+        "body": {
+            "type": "object",
+            "properties": {
+                "content": {
+                    "type": "string"
+                },
+                "contentType": {
+                    "type": "string"
+                }
+            }
+        },
         "bodyPreview": {
             "type": "string"
         },
@@ -19,15 +30,53 @@
         "conversationId": {
             "type": "string"
         },
+        "createdDateTime": {
+            "type": "string"
+        },
+        "from": {
+            "type": "object",
+            "properties": {
+                "emailAddress": {
+                    "type": "object",
+                    "properties": {
+                        "address": {
+                            "type": "string"
+                        },
+                        "name": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
         "hasAttachments": {
             "type": "boolean"
         },
         "id": {
             "type": "string"
         },
+        "isRead": {
+            "type": "boolean"
+        },
+        "sender": {
+            "type": "object",
+            "properties": {
+                "emailAddress": {
+                    "type": "object",
+                    "properties": {
+                        "address": {
+                            "type": "string"
+                        },
+                        "name": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
         "subject": {
             "type": "string"
         }
     },
-    "version": 1
+    "version": 6
 }

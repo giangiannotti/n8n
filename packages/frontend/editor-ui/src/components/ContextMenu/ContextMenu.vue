@@ -1,12 +1,16 @@
 <script lang="ts" setup>
-import { type ContextMenuAction, useContextMenu } from '@/composables/useContextMenu';
+import { useContextMenu } from '@/composables/useContextMenu';
+import { type ContextMenuAction } from '@/composables/useContextMenuItems';
+import { useStyles } from '@/composables/useStyles';
 import { N8nActionDropdown } from '@n8n/design-system';
-import { watch, ref } from 'vue';
+import { ref, watch } from 'vue';
+import { type ComponentExposed } from 'vue-component-type-helpers';
 
 const contextMenu = useContextMenu();
 const { position, isOpen, actions, target } = contextMenu;
-const dropdown = ref<InstanceType<typeof N8nActionDropdown>>();
+const dropdown = ref<ComponentExposed<typeof N8nActionDropdown>>();
 const emit = defineEmits<{ action: [action: ContextMenuAction, nodeIds: string[]] }>();
+const { APP_Z_INDEXES } = useStyles();
 
 watch(
 	isOpen,
@@ -20,10 +24,8 @@ watch(
 	{ flush: 'post' },
 );
 
-function onActionSelect(item: string) {
-	const action = item as ContextMenuAction;
-	contextMenu._dispatchAction(action);
-	emit('action', action, contextMenu.targetNodeIds.value);
+function onActionSelect(item: ContextMenuAction) {
+	emit('action', item, contextMenu.targetNodeIds.value);
 }
 
 function onVisibleChange(open: boolean) {
@@ -40,6 +42,7 @@ function onVisibleChange(open: boolean) {
 			:style="{
 				left: `${position[0]}px`,
 				top: `${position[1]}px`,
+				zIndex: APP_Z_INDEXES.CONTEXT_MENU,
 			}"
 		>
 			<N8nActionDropdown

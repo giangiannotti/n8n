@@ -1,29 +1,50 @@
-/* eslint-disable n8n-nodes-base/node-dirname-against-convention */
 import { DynamicStructuredTool, DynamicTool } from '@langchain/core/tools';
+import { TaskRunnersConfig } from '@n8n/config';
+import { Container } from '@n8n/di';
 import type { JSONSchema7 } from 'json-schema';
 import { JavaScriptSandbox } from 'n8n-nodes-base/dist/nodes/Code/JavaScriptSandbox';
+import { JsTaskRunnerSandbox } from 'n8n-nodes-base/dist/nodes/Code/JsTaskRunnerSandbox';
 import { PythonSandbox } from 'n8n-nodes-base/dist/nodes/Code/PythonSandbox';
 import type { Sandbox } from 'n8n-nodes-base/dist/nodes/Code/Sandbox';
 import { getSandboxContext } from 'n8n-nodes-base/dist/nodes/Code/Sandbox';
 import type {
+	ExecutionError,
+	IDataObject,
 	INodeType,
 	INodeTypeDescription,
 	ISupplyDataFunctions,
 	SupplyData,
-	ExecutionError,
-	IDataObject,
 } from 'n8n-workflow';
-import { jsonParse, NodeConnectionTypes, NodeOperationError } from 'n8n-workflow';
 
+import {
+	jsonParse,
+	NodeConnectionTypes,
+	nodeNameToToolName,
+	NodeOperationError,
+} from 'n8n-workflow';
 import {
 	buildInputSchemaField,
 	buildJsonSchemaExampleField,
+	buildJsonSchemaExampleNotice,
 	schemaTypeField,
 } from '@utils/descriptions';
-import { convertJsonSchemaToZod, generateSchema } from '@utils/schemaParsing';
+import { convertJsonSchemaToZod, generateSchemaFromExample } from '@utils/schemaParsing';
 import { getConnectionHintNoticeField } from '@utils/sharedFields';
 
 import type { DynamicZodObject } from '../../../types/zod.types';
+
+const jsonSchemaExampleField = buildJsonSchemaExampleField({
+	showExtraProps: { specifyInputSchema: [true] },
+});
+
+const jsonSchemaExampleNotice = buildJsonSchemaExampleNotice({
+	showExtraProps: {
+		specifyInputSchema: [true],
+		'@version': [{ _cnd: { gte: 1.3 } }],
+	},
+});
+
+const jsonSchemaField = buildInputSchemaField({ showExtraProps: { specifyInputSchema: [true] } });
 
 export class ToolCode implements INodeType {
 	description: INodeTypeDescription = {
@@ -32,7 +53,7 @@ export class ToolCode implements INodeType {
 		icon: 'fa:code',
 		iconColor: 'black',
 		group: ['transform'],
-		version: [1, 1.1],
+		version: [1, 1.1, 1.2, 1.3],
 		description: 'Write a tool in JS or Python',
 		defaults: {
 			name: 'Code Tool',
@@ -51,9 +72,9 @@ export class ToolCode implements INodeType {
 				],
 			},
 		},
-		// eslint-disable-next-line n8n-nodes-base/node-class-description-inputs-wrong-regular-node
+
 		inputs: [],
-		// eslint-disable-next-line n8n-nodes-base/node-class-description-outputs-wrong
+
 		outputs: [NodeConnectionTypes.AiTool],
 		outputNames: ['Tool'],
 		properties: [
@@ -88,7 +109,7 @@ export class ToolCode implements INodeType {
 					'The name of the function to be called, could contain letters, numbers, and underscores only',
 				displayOptions: {
 					show: {
-						'@version': [{ _cnd: { gte: 1.1 } }],
+						'@version': [1.1],
 					},
 				},
 			},
@@ -172,8 +193,9 @@ export class ToolCode implements INodeType {
 				default: false,
 			},
 			{ ...schemaTypeField, displayOptions: { show: { specifyInputSchema: [true] } } },
-			buildJsonSchemaExampleField({ showExtraProps: { specifyInputSchema: [true] } }),
-			buildInputSchemaField({ showExtraProps: { specifyInputSchema: [true] } }),
+			jsonSchemaExampleField,
+			jsonSchemaExampleNotice,
+			jsonSchemaField,
 		],
 	};
 
@@ -181,7 +203,15 @@ export class ToolCode implements INodeType {
 		const node = this.getNode();
 		const workflowMode = this.getMode();
 
-		const name = this.getNodeParameter('name', itemIndex) as string;
+		const runnersConfig = Container.get(TaskRunnersConfig);
+		const isRunnerEnabled = runnersConfig.enabled;
+
+		const { typeVersion } = node;
+		const name =
+			typeVersion <= 1.1
+				? (this.getNodeParameter('name', itemIndex) as string)
+				: nodeNameToToolName(node);
+
 		const description = this.getNodeParameter('description', itemIndex) as string;
 
 		const useSchema = this.getNodeParameter('specifyInputSchema', itemIndex) as boolean;
@@ -194,6 +224,7 @@ export class ToolCode implements INodeType {
 			code = this.getNodeParameter('pythonCode', itemIndex) as string;
 		}
 
+		// @deprecated - TODO: Remove this after a new python runner is implemented
 		const getSandbox = (query: string | IDataObject, index = 0) => {
 			const context = getSandboxContext.call(this, index);
 			context.query = query;
@@ -215,15 +246,31 @@ export class ToolCode implements INodeType {
 			return sandbox;
 		};
 
-		const runFunction = async (query: string | IDataObject): Promise<string> => {
-			const sandbox = getSandbox(query, itemIndex);
-			return await sandbox.runCode<string>();
+		const runFunction = async (query: string | IDataObject): Promise<unknown> => {
+			if (language === 'javaScript' && isRunnerEnabled) {
+				const sandbox = new JsTaskRunnerSandbox(
+					code,
+					'runOnceForAllItems',
+					workflowMode,
+					this,
+					undefined,
+					{
+						query,
+					},
+				);
+				const executionData = await sandbox.runCodeForTool();
+				return executionData;
+			} else {
+				// use old vm2-based sandbox for python or when without runner enabled
+				const sandbox = getSandbox(query, itemIndex);
+				return await sandbox.runCode<string>();
+			}
 		};
 
 		const toolHandler = async (query: string | IDataObject): Promise<string> => {
 			const { index } = this.addInputData(NodeConnectionTypes.AiTool, [[{ json: { query } }]]);
 
-			let response: string = '';
+			let response: any = '';
 			let executionError: ExecutionError | undefined;
 			try {
 				response = await runFunction(query);
@@ -269,9 +316,10 @@ export class ToolCode implements INodeType {
 				const inputSchema = this.getNodeParameter('inputSchema', itemIndex, '') as string;
 
 				const schemaType = this.getNodeParameter('schemaType', itemIndex) as 'fromJson' | 'manual';
+
 				const jsonSchema =
 					schemaType === 'fromJson'
-						? generateSchema(jsonExample)
+						? generateSchemaFromExample(jsonExample, this.getNode().typeVersion >= 1.3)
 						: jsonParse<JSONSchema7>(inputSchema);
 
 				const zodSchema = convertJsonSchemaToZod<DynamicZodObject>(jsonSchema);

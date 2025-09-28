@@ -1,4 +1,4 @@
-import { useRootStore } from '@/stores/root.store';
+import { useRootStore } from '@n8n/stores/useRootStore';
 import { useSettingsStore } from '@/stores/settings.store';
 import { useDeviceSupport } from '@n8n/composables/useDeviceSupport';
 import type { WorkflowSettings } from 'n8n-workflow';
@@ -8,8 +8,9 @@ type DebugInfo = {
 		n8nVersion: string;
 		platform: 'docker (cloud)' | 'docker (self-hosted)' | 'npm';
 		nodeJsVersion: string;
+		nodeEnv: string | undefined;
 		database: 'sqlite' | 'mysql' | 'mariadb' | 'postgres';
-		executionMode: 'regular' | 'scaling';
+		executionMode: 'regular' | 'scaling (single-main)' | 'scaling (multi-main)';
 		license: 'community' | 'enterprise (production)' | 'enterprise (sandbox)';
 		consumerId?: string;
 		concurrency: number;
@@ -58,13 +59,18 @@ export function useDebugInfo() {
 						? 'docker (self-hosted)'
 						: 'npm',
 			nodeJsVersion: settingsStore.nodeJsVersion,
+			nodeEnv: settingsStore.nodeEnv,
 			database:
 				settingsStore.databaseType === 'postgresdb'
 					? 'postgres'
 					: settingsStore.databaseType === 'mysqldb'
 						? 'mysql'
 						: settingsStore.databaseType,
-			executionMode: settingsStore.isQueueModeEnabled ? 'scaling' : 'regular',
+			executionMode: settingsStore.isQueueModeEnabled
+				? settingsStore.isMultiMain
+					? 'scaling (multi-main)'
+					: 'scaling (single-main)'
+				: 'regular',
 			concurrency: settingsStore.settings.concurrency,
 			license:
 				settingsStore.isCommunityPlan || !settingsStore.settings.license
