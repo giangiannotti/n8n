@@ -63,12 +63,12 @@ const iconColor = computed(() => {
 			<template v-if="compact" #content>{{ item.label }}</template>
 
 			<N8nRoute
+				:id="item.id"
 				:to="to"
 				role="menuitem"
 				:class="[$style.menuItem, { [$style.active]: active }]"
 				:aria-label="props.ariaLabel"
 				data-test-id="menu-item"
-				:id="item.id"
 				@click="emit('click')"
 			>
 				<div
@@ -81,7 +81,7 @@ const iconColor = computed(() => {
 						:color="iconColor"
 						>{{ item.icon.value }}</N8nText
 					>
-					<N8nIcon v-else-if="icon" :icon="icon" />
+					<N8nIcon v-else-if="icon" :color="iconColor" :icon="icon" />
 				</div>
 				<N8nText v-if="!compact" :class="$style.menuItemText">{{ item.label }}</N8nText>
 				<N8nIcon v-if="item.children && !compact" icon="chevron-right" color="text-light" />
@@ -95,40 +95,40 @@ const iconColor = computed(() => {
 	position: relative;
 	width: 100%;
 	max-width: 100%;
-	margin-bottom: var(--spacing-5xs);
-}
-
-.router-link-active,
-.active {
-	background-color: var(--color-foreground-base);
+	margin-bottom: var(--spacing--5xs);
 }
 
 .menuItem {
 	display: flex;
 	align-items: center;
 	justify-content: center;
-	padding: var(--spacing-3xs);
-	gap: var(--spacing-3xs);
+	padding: var(--spacing--4xs);
+	gap: var(--spacing--4xs);
 	cursor: pointer;
-	color: var(--color-text-base);
-	border-radius: var(--spacing-4xs);
+	color: var(--color--text);
+	border-radius: var(--spacing--4xs);
 	cursor: pointer;
 	min-width: 0;
 	width: 100%;
 	position: relative;
 
 	&:hover .menuItemIcon {
-		color: var(--color-text-dark);
+		color: var(--color--text--shade-1);
+	}
+
+	&:global(.router-link-active),
+	&.active {
+		background-color: var(--color--background--light-1);
+	}
+
+	&:hover:not(.active):not(:global(.router-link-active)) {
+		background-color: var(--color--background--light-1);
+		color: var(--color--text--shade-1);
 	}
 }
 
-.menuItem:hover {
-	background-color: var(--color-foreground-base);
-	color: var(--color-text-dark);
-}
-
 .menuItem:focus-visible {
-	outline: 1px solid var(--color-secondary);
+	outline: 1px solid var(--color--secondary);
 	outline-offset: -1px;
 }
 
@@ -137,40 +137,43 @@ const iconColor = computed(() => {
 	text-overflow: ellipsis;
 	overflow: hidden;
 	flex: 1;
-	line-height: var(--font-size-l);
+	line-height: var(--font-size--lg);
 	min-width: 0;
 }
 
 .menuItemText * {
-	color: var(--color-text-base);
+	color: var(--color--text);
 }
 
 .menuItemIcon {
 	position: relative;
-	width: var(--spacing-s);
-	height: var(--spacing-s);
-	min-width: var(--spacing-s);
+	width: var(--spacing--lg);
+	height: var(--spacing--lg);
+	min-width: var(--spacing--lg);
+	display: flex;
+	align-items: center;
+	justify-content: center;
 
 	&.notification::after {
 		content: '';
 		position: absolute;
-		top: calc(var(--spacing-5xs) * -1);
-		right: calc(var(--spacing-5xs) * -1);
-		width: var(--spacing-4xs);
-		height: var(--spacing-4xs);
-		background-color: var(--color-danger);
+		top: 0;
+		right: 0;
+		width: var(--spacing--4xs);
+		height: var(--spacing--4xs);
+		background-color: var(--color--danger);
 		border-radius: 50%;
 	}
 }
 
 .menuItemEmoji {
-	font-size: var(--spacing-s);
+	font-size: var(--spacing--sm);
 	line-height: 1;
 }
 
 .menuItem.active {
 	.menuItemIcon {
-		color: var(--color-foreground-xdark);
+		color: var(--color--text--shade-1);
 	}
 }
 </style>

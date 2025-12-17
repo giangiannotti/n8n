@@ -25,7 +25,7 @@ export default {
 	'formInput.validator.defaultPasswordRequirements':
 		'8+ characters, at least 1 number and 1 capital letter',
 	'sticky.markdownHint':
-		'You can style with <a href="https://docs.n8n.io/workflows/sticky-notes/" target="_blank">Markdown</a>',
+		'You can style with <a href="https://docs.n8n.io/workflows/components/sticky-notes/" target="_blank">Markdown</a>',
 	'tags.showMore': (count: number) => `+${count} more`,
 	'datatable.pageSize': 'Page size',
 	'codeDiff.couldNotReplace': 'Could not replace code',
@@ -34,7 +34,7 @@ export default {
 	'codeDiff.replacing': 'Replacing...',
 	'codeDiff.undo': 'Undo',
 	'betaTag.beta': 'beta',
-	'askAssistantButton.askAssistant': 'Ask Assistant',
+	'askAssistantButton.askAssistant': 'n8n AI',
 	'assistantChat.builder.name': 'AI Builder',
 	'assistantChat.builder.generatingFinalWorkflow': 'Generating final workflow...',
 	'assistantChat.builder.configuredNodes': 'Configured nodes',
@@ -54,9 +54,9 @@ export default {
 	'assistantChat.errorParsingMarkdown': 'Error parsing markdown content',
 	'assistantChat.aiAssistantLabel': 'n8n AI',
 	'assistantChat.aiAssistantBetaLabel': 'Beta',
-	'assistantChat.aiAssistantName': 'Assistant',
+	'assistantChat.aiAssistantName': 'n8n AI',
 	'assistantChat.sessionEndMessage.1':
-		'This Assistant session has ended. To start a new session with the Assistant, click an',
+		'This n8n AI session has ended. To start a new session with n8n AI, click a',
 	'assistantChat.sessionEndMessage.2': 'button in n8n',
 	'assistantChat.you': 'You',
 	'assistantChat.quickRepliesTitle': 'Quick reply 👇',
@@ -66,6 +66,7 @@ export default {
 	'assistantChat.placeholder.3': 'button in the UI.',
 	'assistantChat.placeholder.4': 'How can I help?',
 	'assistantChat.inputPlaceholder': 'Enter your response...',
+	'assistantChat.blankStateInputPlaceholder': 'What would you like to automate?',
 	'assistantChat.copy': 'Copy',
 	'assistantChat.copied': 'Copied',
 	'assistantChat.characterLimit': "You've reached the {limit} character limit",
@@ -85,7 +86,7 @@ export default {
 	'promptInput.askAdminToUpgrade': 'Ask your admin to upgrade the instance to get more credits',
 	'promptInput.characterLimitReached': "You've reached the {limit} character limit",
 	'promptInput.remainingCredits': 'Remaining builder AI credits: <b>{count}</b>',
-	'promptInput.monthlyCredits': 'Monthly credits: <b>{count}</b>',
+	'promptInput.monthlyCredits': 'Monthly credits: <b>{count}</b> (1 credit = 1 message)',
 	'promptInput.creditsRenew': 'Credits renew on: <b>{date}</b>',
 	'promptInput.creditsExpire': 'Unused credits expire {date}',
 } as N8nLocale;

@@ -23,6 +23,7 @@ describe('permissions', () => {
 			orchestration: {},
 			project: {},
 			saml: {},
+			provisioning: {},
 			securityAudit: {},
 			sourceControl: {},
 			tag: {},
@@ -34,10 +35,15 @@ describe('permissions', () => {
 			workflowTags: {},
 			folder: {},
 			insights: {},
-			dataStore: {},
+			dataTable: {},
 			mcp: {},
 			mcpApiKey: {},
 			role: {},
+			chatHub: {},
+			chatHubAgent: {},
+			breakingChanges: {},
+			apiKey: {},
+			credentialResolver: {},
 		});
 	});
 	it('getResourcePermissions', () => {
@@ -72,6 +78,8 @@ describe('permissions', () => {
 			'workflow:update',
 			'folder:create',
 			'insights:list',
+			'breakingChanges:list',
+			'apiKey:manage',
 		];
 
 		const permissionRecord: PermissionsRecord = {
@@ -105,6 +113,7 @@ describe('permissions', () => {
 			},
 			saml: {},
 			oidc: {},
+			provisioning: {},
 			mcp: {},
 			mcpApiKey: {},
 			securityAudit: {},
@@ -143,10 +152,19 @@ describe('permissions', () => {
 			insights: {
 				list: true,
 			},
-			dataStore: {},
+			dataTable: {},
 			execution: {},
 			workflowTags: {},
 			role: {},
+			chatHub: {},
+			chatHubAgent: {},
+			breakingChanges: {
+				list: true,
+			},
+			apiKey: {
+				manage: true,
+			},
+			credentialResolver: {},
 		};
 
 		expect(getResourcePermissions(scopes)).toEqual(permissionRecord);
